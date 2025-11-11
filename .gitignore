@@ -1,0 +1,10 @@
+build/
+dependencies.lock
+.idea/
+cmake-build-debug/
+sdkconfig.old
+sdkconfig
+venv/
+.DS_Store
+hardware/racer/fp-info-cache
+hardware/racer/racer-backups
