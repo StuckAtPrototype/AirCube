@@ -5,5 +5,6 @@ idf_component_register(SRCS "main.c"
                                 "ens210.c"
                                 "ens16x_driver.c"
                                 "i2c_driver.c"
-                       PRIV_REQUIRES spi_flash esp_driver_rmt esp_driver_i2c
+                                "serial_protocol.c"
+                       PRIV_REQUIRES spi_flash esp_driver_rmt esp_driver_i2c esp_driver_uart
                        INCLUDE_DIRS "")

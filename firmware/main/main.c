@@ -1,5 +1,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "led_color_lib.h"
 
@@ -7,11 +8,18 @@
 #include "ens210.h"
 #include "ens16x_driver.h"
 #include "i2c_driver.h"
+#include "serial_protocol.h"
 
 static const char *TAG = "main";
 
 #define SENSOR_TASK_STACK_SIZE 4096
 #define SENSOR_TASK_PRIORITY 5
+#define COMMAND_TASK_STACK_SIZE 2048
+#define COMMAND_TASK_PRIORITY 4
+
+// Configurable sensor readout period (default 1000ms)
+static uint32_t sensor_readout_period_ms = 1000;
+static SemaphoreHandle_t readout_period_mutex = NULL;
 
 // AQI color mapping constants
 #define AQI_MIN 0
@@ -20,6 +28,29 @@ static const char *TAG = "main";
 // Global variables to store sensor data for LED color mapping
 static int current_aqi = 0;
 static enum ENS_STATUS current_ens16x_status = ENS_RESERVED;
+
+// Getter and setter for sensor readout period (for serial_protocol.c)
+uint32_t get_sensor_readout_period_ms(void)
+{
+    uint32_t period = 1000;
+    if (readout_period_mutex != NULL) {
+        if (xSemaphoreTake(readout_period_mutex, portMAX_DELAY) == pdTRUE) {
+            period = sensor_readout_period_ms;
+            xSemaphoreGive(readout_period_mutex);
+        }
+    }
+    return period;
+}
+
+void set_sensor_readout_period_ms(uint32_t period)
+{
+    if (readout_period_mutex != NULL) {
+        if (xSemaphoreTake(readout_period_mutex, portMAX_DELAY) == pdTRUE) {
+            sensor_readout_period_ms = period;
+            xSemaphoreGive(readout_period_mutex);
+        }
+    }
+}
 
 /**
  * @brief Map AQI value to color
@@ -50,6 +81,20 @@ static uint32_t aqi_to_color(int aqi)
     uint16_t hue = HUE_GREEN - (uint16_t)(ratio * HUE_GREEN);
     
     return get_color_from_hue(hue);
+}
+
+// Command processing task
+void command_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "Command task started");
+    
+    while (1) {
+        // Process incoming commands
+        serial_process_commands();
+        
+        // Small delay to prevent CPU spinning
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
 }
 
 // Sensor reading task
@@ -107,8 +152,13 @@ void sensor_task(void *pvParameters)
         ESP_LOGI(TAG, "ENS16X - Status: %s, eTVOC: %d ppb, eCO2: %d ppm, AQI: %d", 
                  ens16x_status_str, etvoc, eco2, aqi);
         
-        // Wait 1 second before next reading
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        // Send sensor data as JSON over serial
+        serial_send_sensor_data(ens210_status, temp_c, humidity,
+                               ens16x_status_str, etvoc, eco2, aqi);
+        
+        // Wait for configurable period before next reading
+        uint32_t period = get_sensor_readout_period_ms();
+        vTaskDelay(period / portTICK_PERIOD_MS);
     }
 }
 
@@ -122,6 +172,16 @@ void app_main(void)
         return;
     }
 
+    // Create mutex for readout period
+    readout_period_mutex = xSemaphoreCreateMutex();
+    if (readout_period_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create readout period mutex");
+        return;
+    }
+    
+    // Initialize serial protocol
+    serial_protocol_init();
+    
     // Initialize LED control system
     led_init();
     
@@ -132,6 +192,11 @@ void app_main(void)
     // Initialize ENS16X air quality sensor
     ens16x_init();
     ESP_LOGI(TAG, "ENS16X initialized");
+    
+    // Create command processing task
+    xTaskCreate(command_task, "command_task", COMMAND_TASK_STACK_SIZE, NULL, 
+                COMMAND_TASK_PRIORITY, NULL);
+    ESP_LOGI(TAG, "Command task created");
     
     // Create sensor reading task
     xTaskCreate(sensor_task, "sensor_task", SENSOR_TASK_STACK_SIZE, NULL, 

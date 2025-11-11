@@ -23,7 +23,7 @@ static SemaphoreHandle_t led_mutex = NULL;
 
 // Global LED color and intensity variables (GRB format for WS2812 LEDs)
 static uint32_t led_color = LED_COLOR_OFF;      // Current LED color
-static float led_intensity = 1.0f;              // Current LED intensity (0.0 to 1.0)
+static float led_intensity = 0.3f;              // Current LED intensity (0.0 to 1.0)
 
 // LED state structure for WS2812 driver
 static struct led_state led_new_state = {0};
