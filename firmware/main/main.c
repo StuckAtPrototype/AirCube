@@ -51,16 +51,46 @@ void app_main(void)
             ens210_read_envir();
             float temp_c = ens210_get_temperature(1); // 1 = Celsius
             float humidity = ens210_get_humidity();
+            uint8_t ens210_status = ens210_get_status();
+            
+            // Write ENS210 data to ENS161 for environmental compensation
+            uint8_t ens210_t[2];
+            uint8_t ens210_h[2];
+            ens210_get_envir(ens210_t, ens210_h);
+            ens16x_write_ens210_data(ens210_t, ens210_h);
             
             // Read ENS16X air quality data
             int etvoc = ens16x_read_etvoc();
             int eco2 = ens16x_read_eco2();
             int aqi = ens16x_read_aqi();
+            enum ENS_STATUS ens16x_status = ens16x_get_status();
             
-            // Display all sensor data
+            // Helper function to convert ENS16X status to string
+            const char* ens16x_status_str;
+            switch(ens16x_status) {
+                case ENS_OP_OK:
+                    ens16x_status_str = "OK";
+                    break;
+                case ENS_WARM_UP:
+                    ens16x_status_str = "Warming Up";
+                    break;
+                case ENS_NO_VALID_OUTPUT:
+                    ens16x_status_str = "No Valid Output";
+                    break;
+                case ENS_RESERVED:
+                    ens16x_status_str = "Reserved";
+                    break;
+                default:
+                    ens16x_status_str = "Unknown";
+                    break;
+            }
+            
+            // Display all sensor data with status
             ESP_LOGI(TAG, "=== Sensor Data ===");
-            ESP_LOGI(TAG, "ENS210 - Temperature: %.2f°C, Humidity: %.2f%%", temp_c, humidity);
-            ESP_LOGI(TAG, "ENS16X - eTVOC: %d ppb, eCO2: %d ppm, AQI: %d", etvoc, eco2, aqi);
+            ESP_LOGI(TAG, "ENS210 - Status: 0x%02X, Temperature: %.2f°C, Humidity: %.2f%%", 
+                     ens210_status, temp_c, humidity);
+            ESP_LOGI(TAG, "ENS16X - Status: %s, eTVOC: %d ppb, eCO2: %d ppm, AQI: %d", 
+                     ens16x_status_str, etvoc, eco2, aqi);
         }
     }
 

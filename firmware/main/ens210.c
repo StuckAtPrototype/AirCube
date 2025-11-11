@@ -62,6 +62,17 @@ float ens210_get_humidity(void){
     return humidity_percentage;
 }
 
+uint8_t ens210_get_status(void){
+    uint8_t i2c_data[1];
+    uint8_t i2c_byte_address[1];
+    
+    i2c_byte_address[0] = ENS210_REG_SYS_STAT;
+    i2c_data[0] = 0;
+    i2c_driver_read(ENS210_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 1);
+    
+    return i2c_data[0];
+}
+
 void ens210_deinit(void){
     uint8_t i2c_data[2];
     i2c_data[0] = ENS210_REG_SYS_CTRL;
