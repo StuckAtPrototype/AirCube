@@ -17,8 +17,9 @@ static const char *TAG = "main";
 #define AQI_MIN 0
 #define AQI_MAX 300
 
-// Global variable to store current AQI for LED color mapping
+// Global variables to store sensor data for LED color mapping
 static int current_aqi = 0;
+static enum ENS_STATUS current_ens16x_status = ENS_RESERVED;
 
 /**
  * @brief Map AQI value to color
@@ -75,8 +76,9 @@ void sensor_task(void *pvParameters)
         int aqi = ens16x_read_aqi();
         enum ENS_STATUS ens16x_status = ens16x_get_status();
         
-        // Update global AQI for LED color mapping
+        // Update global variables for LED color mapping
         current_aqi = aqi;
+        current_ens16x_status = ens16x_status;
         
         // Helper function to convert ENS16X status to string
         const char* ens16x_status_str;
@@ -136,12 +138,21 @@ void app_main(void)
                 SENSOR_TASK_PRIORITY, NULL);
     ESP_LOGI(TAG, "Sensor task created");
 
-    // Main loop for LED color based on AQI
+    // Main loop for LED color based on sensor status and AQI
     while (1) {
         vTaskDelay(100 / portTICK_PERIOD_MS);  // Update LED every 100ms
         
-        // Map AQI to color (green at 0, red at 300+)
-        uint32_t color = aqi_to_color(current_aqi);
+        uint32_t color;
+        
+        // If sensor is warming up, pulse blue
+        if (current_ens16x_status == ENS_WARM_UP) {
+            // Blue color: R=0, G=0, B=255
+            color = get_pulsing_color(0, 0, 255);
+        } else {
+            // Otherwise, use AQI-based color (green at 0, red at 300+)
+            color = aqi_to_color(current_aqi);
+        }
+        
         led_set_color(color);
     }
 }
