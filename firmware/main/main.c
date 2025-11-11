@@ -2,6 +2,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "led_color_lib.h"
 
 #include "led.h"
@@ -71,11 +72,10 @@ static uint32_t aqi_to_color(int aqi)
     // Hue values: green is at 2/6 of the spectrum (120 degrees), red is at 0 (0 degrees)
     // For 16-bit hue: green = (2/6) * 65536 = 21845, red = 0
     const uint16_t HUE_GREEN = 21845;  // 2/6 of 65536 (120 degrees - green)
-    const uint16_t HUE_RED = 0;       // 0 degrees - red
     
     // Linear interpolation from green (AQI 0) to red (AQI 300)
     // When AQI = 0: hue = HUE_GREEN (green)
-    // When AQI = 300: hue = HUE_RED (red)
+    // When AQI = 300: hue = 0 (red)
     // We go backwards from green to red
     float ratio = (float)aqi / (float)AQI_MAX;
     uint16_t hue = HUE_GREEN - (uint16_t)(ratio * HUE_GREEN);
@@ -165,6 +165,21 @@ void sensor_task(void *pvParameters)
 void app_main(void)
 {
     ESP_LOGI(TAG, "AirCube");
+
+    // Configure power management with automatic light sleep
+    // Note: ESP32-H2 uses the same structure as ESP32-C2 (both RISC-V based)
+    esp_pm_config_esp32c2_t pm_config = {
+        .max_freq_mhz = 96,           // Maximum CPU frequency (MHz)
+        .min_freq_mhz = 8,            // Minimum CPU frequency (MHz)
+        .light_sleep_enable = true    // Enable automatic light sleep when idle
+    };
+    
+    esp_err_t ret = esp_pm_configure(&pm_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure power management: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Power management configured with automatic light sleep enabled");
+    }
 
     // Initialize I2C driver (must be done before initializing sensors)
     if (i2c_driver_init() != ESP_OK) {
