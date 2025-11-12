@@ -24,7 +24,7 @@ static SemaphoreHandle_t readout_period_mutex = NULL;
 
 // AQI color mapping constants
 #define AQI_MIN 0
-#define AQI_MAX 300
+#define AQI_MAX 200
 
 // Global variables to store sensor data for LED color mapping
 static int current_aqi = 0;
@@ -56,9 +56,9 @@ void set_sensor_readout_period_ms(uint32_t period)
 /**
  * @brief Map AQI value to color
  * 
- * Maps AQI from 0 (green) to 300+ (red) using hue values
+ * Maps AQI from 0 (green) to 200+ (red) using hue values
  * AQI 0 = green (hue 21845, which is 2/6 of spectrum = 120 degrees)
- * AQI 300+ = red (hue 0, which is 0 degrees)
+ * AQI 200+ = red (hue 0, which is 0 degrees)
  * 
  * @param aqi Air Quality Index value
  * @return 24-bit GRB color value
@@ -73,9 +73,9 @@ static uint32_t aqi_to_color(int aqi)
     // For 16-bit hue: green = (2/6) * 65536 = 21845, red = 0
     const uint16_t HUE_GREEN = 21845;  // 2/6 of 65536 (120 degrees - green)
     
-    // Linear interpolation from green (AQI 0) to red (AQI 300)
+    // Linear interpolation from green (AQI 0) to red (AQI 200)
     // When AQI = 0: hue = HUE_GREEN (green)
-    // When AQI = 300: hue = 0 (red)
+    // When AQI = 200: hue = 0 (red)
     // We go backwards from green to red
     float ratio = (float)aqi / (float)AQI_MAX;
     uint16_t hue = HUE_GREEN - (uint16_t)(ratio * HUE_GREEN);
@@ -169,9 +169,9 @@ void app_main(void)
     // Configure power management with automatic light sleep
     // Note: ESP32-H2 uses the same structure as ESP32-C2 (both RISC-V based)
     esp_pm_config_esp32c2_t pm_config = {
-        .max_freq_mhz = 96,           // Maximum CPU frequency (MHz)
-        .min_freq_mhz = 8,            // Minimum CPU frequency (MHz)
-        .light_sleep_enable = true    // Enable automatic light sleep when idle
+        .max_freq_mhz = 10,           // Maximum CPU frequency (MHz)
+        .min_freq_mhz = 10,            // Minimum CPU frequency (MHz)
+        .light_sleep_enable = false    // Enable automatic light sleep when idle
     };
     
     esp_err_t ret = esp_pm_configure(&pm_config);
@@ -228,8 +228,12 @@ void app_main(void)
         if (current_ens16x_status == ENS_WARM_UP) {
             // Blue color: R=0, G=0, B=255
             color = get_pulsing_color(0, 0, 255);
+        } else if (current_aqi >= AQI_MAX) {
+            // If AQI is 200+, pulsate red to indicate dangerous air quality
+            // Red color: R=255, G=0, B=0
+            color = get_pulsing_color(255, 0, 0);
         } else {
-            // Otherwise, use AQI-based color (green at 0, red at 300+)
+            // Otherwise, use AQI-based color (green at 0, red at 200)
             color = aqi_to_color(current_aqi);
         }
         
