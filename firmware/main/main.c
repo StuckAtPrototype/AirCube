@@ -11,6 +11,7 @@
 #include "ens16x_driver.h"
 #include "i2c_driver.h"
 #include "serial_protocol.h"
+#include "button.h"
 
 static const char *TAG = "main";
 
@@ -237,6 +238,9 @@ void app_main(void)
     
     // Initialize LED control system
     led_init();
+    
+    // Initialize button for brightness control
+    button_init();
     
     // Initialize ENS210 temperature and humidity sensor
     ens210_init();
