@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "esp_pm.h"
 #include "led_color_lib.h"
+#include <math.h>
 
 #include "led.h"
 #include "ens210.h"
@@ -29,6 +30,10 @@ static SemaphoreHandle_t readout_period_mutex = NULL;
 // Global variables to store sensor data for LED color mapping
 static int current_aqi = 0;
 static enum ENS_STATUS current_ens16x_status = ENS_RESERVED;
+
+// Static variables for pulsing effect
+static uint32_t pulse_time_ms = 0;  // Current pulse time in milliseconds (accumulates)
+#define PULSE_MS 50  // Pulse period in milliseconds
 
 // Getter and setter for sensor readout period (for serial_protocol.c)
 uint32_t get_sensor_readout_period_ms(void)
@@ -81,6 +86,39 @@ static uint32_t aqi_to_color(int aqi)
     uint16_t hue = HUE_GREEN - (uint16_t)(ratio * HUE_GREEN);
     
     return get_color_from_hue(hue);
+}
+
+/**
+ * @brief Get pulsing color effect with intensity support
+ * 
+ * This function creates a pulsing effect by modulating the brightness of a given
+ * color using a sine wave. The pulse goes from 0 to full brightness (255) at peak.
+ * The LED task will apply the intensity setting, so the pulse will respect the
+ * configured brightness level (pulse peak = intensity * 255).
+ * 
+ * @param red Red component of the base color (0-255)
+ * @param green Green component of the base color (0-255)
+ * @param blue Blue component of the base color (0-255)
+ * @return 24-bit GRB color value with pulsing brightness (intensity applied by LED task)
+ */
+static uint32_t get_pulsing_color_with_intensity(uint8_t red, uint8_t green, uint8_t blue) {
+    // Increment the time (function is called every 100ms)
+    pulse_time_ms += 100;
+    
+    // Calculate the phase of the pulse (0 to 2π) using modulo to wrap around
+    float phase = ((pulse_time_ms % PULSE_MS) / (float)PULSE_MS) * 2 * M_PI;
+
+    // Use a sine wave to create a smooth pulse (range: 0 to 1.0 for full brightness)
+    float pulse_brightness = (sinf(phase) + 1.0f) / 2.0f;  // Range: 0.0 to 1.0
+
+    // Apply the pulse brightness to the specified color (0 to 255)
+    // The LED task will apply the intensity setting, so we pulse to full brightness here
+    float r = pulse_brightness * red;
+    float g = pulse_brightness * green;
+    float b = pulse_brightness * blue;
+
+    // Convert to GRB format for WS2812 LEDs
+    return ((uint32_t)(g + 0.5f) << 16) | ((uint32_t)(r + 0.5f) << 8) | (uint32_t)(b + 0.5f);
 }
 
 // Command processing task
@@ -227,11 +265,11 @@ void app_main(void)
         // If sensor is warming up, pulse blue
         if (current_ens16x_status == ENS_WARM_UP) {
             // Blue color: R=0, G=0, B=255
-            color = get_pulsing_color(0, 0, 255);
+            color = get_pulsing_color_with_intensity(0, 0, 255);
         } else if (current_aqi >= AQI_MAX) {
             // If AQI is 200+, pulsate red to indicate dangerous air quality
             // Red color: R=255, G=0, B=0
-            color = get_pulsing_color(255, 0, 0);
+            color = get_pulsing_color_with_intensity(255, 0, 0);
         } else {
             // Otherwise, use AQI-based color (green at 0, red at 200)
             color = aqi_to_color(current_aqi);

@@ -71,20 +71,6 @@ void set_hue_increment(uint16_t increment);
 uint32_t get_color_between_blue_red(float value);
 
 /**
- * @brief Generate a pulsing color effect
- * 
- * This function creates a pulsing brightness effect using a sine wave
- * to modulate the brightness of the input RGB color. The pulsing
- * creates a breathing or heartbeat-like visual effect.
- * 
- * @param red Red component (0-255)
- * @param green Green component (0-255)
- * @param blue Blue component (0-255)
- * @return 24-bit GRB color value with pulsing brightness
- */
-uint32_t get_pulsing_color(uint8_t red, uint8_t green, uint8_t blue);
-
-/**
  * @brief Get color from green to red gradient
  * 
  * This function returns a color that transitions from green to red

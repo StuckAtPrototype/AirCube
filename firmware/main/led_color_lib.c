@@ -134,42 +134,6 @@ uint32_t get_color_between_blue_red(float value) {
     return ((uint32_t)(g + 0.5f) << 16) | ((uint32_t)(r + 0.5f) << 8) | (uint32_t)(b + 0.5f);
 }
 
-// Static variables for pulsing effect
-static uint32_t pulse_time_ms = 0;  // Current pulse time in milliseconds
-#define PULSE_MS 100  // Pulse period in milliseconds
-
-/**
- * @brief Get pulsing color effect
- * 
- * This function creates a pulsing effect by modulating the brightness of a given
- * color using a sine wave. The color pulses smoothly from dim to bright and back.
- * 
- * @param red Red component of the base color (0-255)
- * @param green Green component of the base color (0-255)
- * @param blue Blue component of the base color (0-255)
- * @return 24-bit color value in GRB format with pulsing brightness
- */
-uint32_t get_pulsing_color(uint8_t red, uint8_t green, uint8_t blue) {
-    // Calculate the phase of the pulse (0 to 2π)
-    float phase = (pulse_time_ms / (float)PULSE_MS) * 2 * M_PI;
-
-    // Use a sine wave to create a smooth pulse (range: 0 to 0.5)
-    float brightness = (sinf(phase) + 1) / 4;
-
-    // Apply the brightness to the specified color
-    float r = brightness * red;
-    float g = brightness * green;
-    float b = brightness * blue;
-
-    // Increment the time (function is called every 10ms)
-    pulse_time_ms += 1;
-    if (pulse_time_ms >= PULSE_MS) {
-        pulse_time_ms = 0;  // Reset after PULSE_MS milliseconds
-    }
-
-    // Convert to GRB format for WS2812 LEDs
-    return ((uint32_t)(g + 0.5f) << 16) | ((uint32_t)(r + 0.5f) << 8) | (uint32_t)(b + 0.5f);
-}
 
 /**
  * @brief Get color from green to red gradient
