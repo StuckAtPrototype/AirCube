@@ -103,6 +103,59 @@ static uint32_t aqi_to_color(int aqi)
 }
 
 /**
+ * @brief Startup animation - sweeps from green to red and back to green
+ * 
+ * This function displays a 3-second animation that smoothly transitions
+ * from green to red and back to green when the device starts up.
+ * Uses time-based animation to ensure accurate timing.
+ */
+static void startup_animation(void) {
+    const uint16_t HUE_GREEN = 21845;  // 2/6 of 65536 (120 degrees - green)
+    const uint32_t ANIMATION_DURATION_MS = 3000;  // 3 seconds total
+    const uint32_t UPDATE_INTERVAL_MS = 10;  // Update every 10ms for smooth animation
+    
+    // Get start time in ticks
+    TickType_t start_ticks = xTaskGetTickCount();
+    TickType_t duration_ticks = pdMS_TO_TICKS(ANIMATION_DURATION_MS);
+    
+    while (1) {
+        // Calculate elapsed time
+        TickType_t current_ticks = xTaskGetTickCount();
+        TickType_t elapsed_ticks = current_ticks - start_ticks;
+        
+        // Check if animation is complete
+        if (elapsed_ticks >= duration_ticks) {
+            break;
+        }
+        
+        // Calculate progress from 0.0 to 1.0 based on elapsed time
+        float progress = (float)elapsed_ticks / (float)duration_ticks;
+        
+        uint16_t hue;
+        if (progress <= 0.5f) {
+            // First half: green to red (0.0 to 0.5)
+            float ratio = progress * 2.0f;  // 0.0 to 1.0
+            hue = HUE_GREEN - (uint16_t)(ratio * HUE_GREEN);
+        } else {
+            // Second half: red back to green (0.5 to 1.0)
+            float ratio = (progress - 0.5f) * 2.0f;  // 0.0 to 1.0
+            hue = (uint16_t)(ratio * HUE_GREEN);
+        }
+        
+        // Get color from hue (intensity is applied by LED task)
+        uint32_t color = get_color_from_hue(hue);
+        led_set_color(color);
+        
+        // Delay until next update
+        vTaskDelay(pdMS_TO_TICKS(UPDATE_INTERVAL_MS));
+    }
+    
+    // Ensure we end on green
+    uint32_t final_color = get_color_from_hue(HUE_GREEN);
+    led_set_color(final_color);
+}
+
+/**
  * @brief Get pulsing color effect with intensity support
  * 
  * This function creates a pulsing effect by modulating the brightness of a given
@@ -262,6 +315,16 @@ void app_main(void)
     
     // Initialize LED control system
     led_init();
+    
+    // Set initial LED color to green (animation start color) before animation
+    const uint16_t HUE_GREEN = 21845;  // 2/6 of 65536 (120 degrees - green)
+    uint32_t start_color = get_color_from_hue(HUE_GREEN);
+    led_set_color(start_color);
+
+    
+    // // Play startup animation (3 second sweep from green to red and back)
+    // ESP_LOGI(TAG, "Playing startup animation");
+    // startup_animation();
     
     // Initialize button for brightness control
     button_init();
