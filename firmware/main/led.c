@@ -86,8 +86,9 @@ static void led_task(void *pvParameters)
             }
         }
 
-        // Task delay for 5ms (200Hz update rate) for smooth animations
-        vTaskDelay(pdMS_TO_TICKS(5));
+        // Task delay for 20ms (50Hz update rate) - sufficient for smooth animations
+        // The main loop updates color more frequently, this task just displays the latest value
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 

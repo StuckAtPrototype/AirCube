@@ -38,6 +38,13 @@ static enum ENS_STATUS current_ens16x_status = ENS_RESERVED;
 static uint32_t pulse_time_ms = 0;  // Current pulse time in milliseconds (accumulates)
 #define PULSE_MS 50  // Pulse period in milliseconds
 
+// Static variables for smooth LED color transitions
+static float current_hue = 21845.0f;  // Current hue value (21845 = green, 0 = red) - using float for smooth transitions
+static uint16_t target_hue = 21845;   // Target hue value we want to transition to
+#define TRANSITION_SPEED 0.02f  // Transition speed per update (0.0 to 1.0, higher = faster)
+// With 20ms update interval and 0.02 speed, full transition takes ~1 second (50 steps)
+#define HUE_GREEN 21845  // 2/6 of 65536 (120 degrees - green)
+
 // Getter and setter for sensor readout period (for serial_protocol.c)
 uint32_t get_sensor_readout_period_ms(void)
 {
@@ -62,16 +69,16 @@ void set_sensor_readout_period_ms(uint32_t period)
 }
 
 /**
- * @brief Map AQI value to color
+ * @brief Map AQI value to hue
  * 
  * Maps AQI with the following behavior:
  * - AQI 0-10: pure green (no color change)
  * - AQI 10-200: smooth gradient from green to red
  * 
  * @param aqi Air Quality Index value
- * @return 24-bit GRB color value
+ * @return 16-bit hue value (21845 = green, 0 = red)
  */
-static uint32_t aqi_to_color(int aqi)
+static uint16_t aqi_to_hue(int aqi)
 {
     // Clamp AQI to valid range
     if (aqi < AQI_MIN) aqi = AQI_MIN;
@@ -79,16 +86,10 @@ static uint32_t aqi_to_color(int aqi)
     
     // Values 0-10 are pure green
     if (aqi <= AQI_GREEN_THRESHOLD) {
-        // Return pure green: hue = 21845 (2/6 of 65536 = 120 degrees)
-        const uint16_t HUE_GREEN = 21845;
-        return get_color_from_hue(HUE_GREEN);
+        return HUE_GREEN;
     }
     
     // For values 10-200, map smoothly from green to red
-    // Hue values: green is at 2/6 of the spectrum (120 degrees), red is at 0 (0 degrees)
-    // For 16-bit hue: green = (2/6) * 65536 = 21845, red = 0
-    const uint16_t HUE_GREEN = 21845;  // 2/6 of 65536 (120 degrees - green)
-    
     // Map AQI from [10, 200] to ratio [0.0, 1.0] for smooth gradient
     // When AQI = 10: ratio = 0.0 (green)
     // When AQI = 200: ratio = 1.0 (red)
@@ -99,7 +100,7 @@ static uint32_t aqi_to_color(int aqi)
     // ratio = 1.0 -> hue = 0 (red)
     uint16_t hue = HUE_GREEN - (uint16_t)(ratio * HUE_GREEN);
     
-    return get_color_from_hue(hue);
+    return hue;
 }
 
 /**
@@ -110,7 +111,6 @@ static uint32_t aqi_to_color(int aqi)
  * Uses time-based animation to ensure accurate timing.
  */
 static void startup_animation(void) {
-    const uint16_t HUE_GREEN = 21845;  // 2/6 of 65536 (120 degrees - green)
     const uint32_t ANIMATION_DURATION_MS = 3000;  // 3 seconds total
     const uint32_t UPDATE_INTERVAL_MS = 10;  // Update every 10ms for smooth animation
     
@@ -169,8 +169,8 @@ static void startup_animation(void) {
  * @return 24-bit GRB color value with pulsing brightness (intensity applied by LED task)
  */
 static uint32_t get_pulsing_color_with_intensity(uint8_t red, uint8_t green, uint8_t blue) {
-    // Increment the time (function is called every 100ms)
-    pulse_time_ms += 100;
+    // Increment the time (function is called every 20ms)
+    pulse_time_ms += 20;
     
     // Calculate the phase of the pulse (0 to 2π) using modulo to wrap around
     float phase = ((pulse_time_ms % PULSE_MS) / (float)PULSE_MS) * 2 * M_PI;
@@ -317,7 +317,6 @@ void app_main(void)
     led_init();
     
     // Set initial LED color to green (animation start color) before animation
-    const uint16_t HUE_GREEN = 21845;  // 2/6 of 65536 (120 degrees - green)
     uint32_t start_color = get_color_from_hue(HUE_GREEN);
     led_set_color(start_color);
 
@@ -349,23 +348,35 @@ void app_main(void)
 
     // Main loop for LED color based on sensor status and AQI
     while (1) {
-        vTaskDelay(100 / portTICK_PERIOD_MS);  // Update LED every 100ms
+        vTaskDelay(pdMS_TO_TICKS(20));  // Update LED every 20ms for smooth transitions
         
-        uint32_t color;
-        
-        // If sensor is warming up, pulse blue
+        // Determine target hue based on sensor status and AQI
         if (current_ens16x_status == ENS_WARM_UP) {
-            // Blue color: R=0, G=0, B=255
-            color = get_pulsing_color_with_intensity(0, 0, 255);
+            // If sensor is warming up, target blue hue
+            // Blue is at 4/6 of the spectrum: (4/6) * 65536 = 43690
+            target_hue = 43690;
         } else if (current_aqi >= AQI_MAX) {
-            // If AQI is 200+, pulsate red to indicate dangerous air quality
-            // Red color: R=255, G=0, B=0
-            color = get_pulsing_color_with_intensity(255, 0, 0);
+            // If AQI is 200+, target red hue (0)
+            target_hue = 0;
         } else {
-            // Otherwise, use AQI-based color (green at 0, red at 200)
-            color = aqi_to_color(current_aqi);
+            // Otherwise, use AQI-based hue (green at 0, red at 200)
+            target_hue = aqi_to_hue(current_aqi);
         }
         
+        // Smoothly transition current_hue towards target_hue
+        float hue_diff = (float)target_hue - current_hue;
+        current_hue += hue_diff * TRANSITION_SPEED;
+        
+        // Convert current hue to color (cast to uint16_t for color conversion)
+        uint32_t color = get_color_from_hue((uint16_t)current_hue);
+        
+        // Apply pulsing effect if needed
+        if (current_ens16x_status == ENS_WARM_UP) {
+            // Pulse blue
+            color = get_pulsing_color_with_intensity(0, 0, 255);
+        } 
+        
+        // Update LED with the smoothly transitioning color
         led_set_color(color);
     }
 }
