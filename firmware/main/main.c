@@ -28,6 +28,7 @@ static SemaphoreHandle_t readout_period_mutex = NULL;
 // AQI color mapping constants
 #define AQI_MIN 0
 #define AQI_MAX 200
+#define AQI_GREEN_THRESHOLD 10  // Values 0-10 are pure green
 
 // Global variables to store sensor data for LED color mapping
 static int current_aqi = 0;
@@ -63,9 +64,9 @@ void set_sensor_readout_period_ms(uint32_t period)
 /**
  * @brief Map AQI value to color
  * 
- * Maps AQI from 0 (green) to 200+ (red) using hue values
- * AQI 0 = green (hue 21845, which is 2/6 of spectrum = 120 degrees)
- * AQI 200+ = red (hue 0, which is 0 degrees)
+ * Maps AQI with the following behavior:
+ * - AQI 0-10: pure green (no color change)
+ * - AQI 10-200: smooth gradient from green to red
  * 
  * @param aqi Air Quality Index value
  * @return 24-bit GRB color value
@@ -76,15 +77,26 @@ static uint32_t aqi_to_color(int aqi)
     if (aqi < AQI_MIN) aqi = AQI_MIN;
     if (aqi > AQI_MAX) aqi = AQI_MAX;
     
+    // Values 0-10 are pure green
+    if (aqi <= AQI_GREEN_THRESHOLD) {
+        // Return pure green: hue = 21845 (2/6 of 65536 = 120 degrees)
+        const uint16_t HUE_GREEN = 21845;
+        return get_color_from_hue(HUE_GREEN);
+    }
+    
+    // For values 10-200, map smoothly from green to red
     // Hue values: green is at 2/6 of the spectrum (120 degrees), red is at 0 (0 degrees)
     // For 16-bit hue: green = (2/6) * 65536 = 21845, red = 0
     const uint16_t HUE_GREEN = 21845;  // 2/6 of 65536 (120 degrees - green)
     
-    // Linear interpolation from green (AQI 0) to red (AQI 200)
-    // When AQI = 0: hue = HUE_GREEN (green)
-    // When AQI = 200: hue = 0 (red)
-    // We go backwards from green to red
-    float ratio = (float)aqi / (float)AQI_MAX;
+    // Map AQI from [10, 200] to ratio [0.0, 1.0] for smooth gradient
+    // When AQI = 10: ratio = 0.0 (green)
+    // When AQI = 200: ratio = 1.0 (red)
+    float ratio = (float)(aqi - AQI_GREEN_THRESHOLD) / (float)(AQI_MAX - AQI_GREEN_THRESHOLD);
+    
+    // Linear interpolation from green to red
+    // ratio = 0.0 -> hue = HUE_GREEN (green)
+    // ratio = 1.0 -> hue = 0 (red)
     uint16_t hue = HUE_GREEN - (uint16_t)(ratio * HUE_GREEN);
     
     return get_color_from_hue(hue);
