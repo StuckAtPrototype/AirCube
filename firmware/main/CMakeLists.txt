@@ -7,5 +7,5 @@ idf_component_register(SRCS "main.c"
                                 "i2c_driver.c"
                                 "serial_protocol.c"
                                 "button.c"
-                       PRIV_REQUIRES spi_flash esp_driver_rmt esp_driver_i2c esp_driver_uart esp_pm esp_driver_gpio
+                       PRIV_REQUIRES spi_flash esp_driver_rmt esp_driver_i2c esp_driver_uart esp_pm esp_driver_gpio nvs_flash
                        INCLUDE_DIRS "")

@@ -13,9 +13,12 @@
 #include "led.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include <stdbool.h>
 
 static const char *TAG = "button";
 
@@ -24,6 +27,10 @@ static const char *TAG = "button";
 
 // Debounce timing (in milliseconds)
 #define DEBOUNCE_MS 50
+
+// NVS namespace and key for brightness storage
+#define NVS_NAMESPACE "aircube"
+#define NVS_KEY_BRIGHTNESS "led_brightness"
 
 // Brightness levels array
 static const float brightness_levels[] = {0.0f, 0.3f, 0.6f, 1.0f};
@@ -34,6 +41,80 @@ static int current_brightness_index = 2;  // 0.6 is the default
 
 // GPIO interrupt queue
 static QueueHandle_t gpio_evt_queue = NULL;
+
+/**
+ * @brief Save brightness index to NVS
+ * 
+ * @param brightness_index Index of brightness level to save
+ * @return true on success, false on failure
+ */
+static bool save_brightness_to_nvs(int brightness_index)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error opening NVS handle: %s", esp_err_to_name(err));
+        return false;
+    }
+    
+    err = nvs_set_i32(nvs_handle, NVS_KEY_BRIGHTNESS, brightness_index);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error saving brightness to NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return false;
+    }
+    
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error committing NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return false;
+    }
+    
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Brightness saved to NVS: index %d (%.1f)", brightness_index, brightness_levels[brightness_index]);
+    return true;
+}
+
+/**
+ * @brief Load brightness index from NVS
+ * 
+ * @param brightness_index Pointer to store the loaded brightness index
+ * @return true if value was loaded, false if not found or error
+ */
+static bool load_brightness_from_nvs(int *brightness_index)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Error opening NVS handle: %s (using default)", esp_err_to_name(err));
+        return false;
+    }
+    
+    int32_t saved_index = 2; // Default index (0.6)
+    err = nvs_get_i32(nvs_handle, NVS_KEY_BRIGHTNESS, &saved_index);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(TAG, "No saved brightness found in NVS, using default");
+        nvs_close(nvs_handle);
+        return false;
+    } else if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error reading brightness from NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return false;
+    }
+    
+    // Validate the saved index
+    if (saved_index < 0 || saved_index >= num_brightness_levels) {
+        ESP_LOGW(TAG, "Invalid brightness index %ld in NVS, using default", saved_index);
+        nvs_close(nvs_handle);
+        return false;
+    }
+    
+    *brightness_index = (int)saved_index;
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Brightness loaded from NVS: index %d (%.1f)", *brightness_index, brightness_levels[*brightness_index]);
+    return true;
+}
 
 /**
  * @brief GPIO interrupt handler
@@ -79,6 +160,9 @@ static void button_task(void *pvParameters)
                     
                     // Update LED brightness
                     led_set_intensity(new_brightness);
+                    
+                    // Save brightness to NVS
+                    save_brightness_to_nvs(current_brightness_index);
                     
                     ESP_LOGI(TAG, "Button pressed - Brightness set to %.1f", new_brightness);
                 }
@@ -141,7 +225,13 @@ void button_init(void)
         return;
     }
     
-    // Set initial brightness to default (0.6)
+    // Load saved brightness from NVS, or use default
+    int saved_index = 2; // Default index (0.6)
+    if (load_brightness_from_nvs(&saved_index)) {
+        current_brightness_index = saved_index;
+    }
+    
+    // Set initial brightness (either from NVS or default)
     led_set_intensity(brightness_levels[current_brightness_index]);
     
     ESP_LOGI(TAG, "Button initialized successfully");

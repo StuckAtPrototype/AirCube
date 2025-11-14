@@ -3,6 +3,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_pm.h"
+#include "nvs_flash.h"
 #include "led_color_lib.h"
 #include <math.h>
 
@@ -219,6 +220,17 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "Power management configured with automatic light sleep enabled");
     }
+
+    // Initialize NVS (Non-Volatile Storage) for saving settings
+    ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // NVS partition was truncated and needs to be erased
+        // Retry nvs_flash_init
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "NVS initialized");
 
     // Initialize I2C driver (must be done before initializing sensors)
     if (i2c_driver_init() != ESP_OK) {
