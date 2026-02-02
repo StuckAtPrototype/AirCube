@@ -31,20 +31,15 @@ Watch the AirCube in action: [YouTube Demo](https://youtu.be/m12KpLyLCrw)
    idf.py -p COM3 flash monitor  # Replace COM3 with your port
    ```
 
-3. **Run the data logger** (in a separate terminal):
+3. **Run the desktop app**:
    ```bash
    cd scripts
-   pip install pyserial matplotlib
-   # Edit aircube_logger.py to set your COM port
-   python aircube_logger.py
+   pip install -r requirements.txt
+   python aircube_app.py
    ```
+   The AirCube app will open. Select your serial port from the dropdown, click **Connect**, and you're live!
 
-4. **Visualize the data** (in another terminal):
-   ```bash
-   python aircube_data_visualizer.py
-   ```
-
-That's it! Your AirCube should now be running and logging data.
+That's it! Your AirCube should now be running and showing live data.
 
 ## ✨ Features
 
@@ -187,90 +182,96 @@ firmware/
 
 ### Python Scripts
 
-Python utilities for data logging and visualization are located in the `scripts/` directory.
+Python utilities for connecting to the AirCube, logging, and visualization are in the `scripts/` directory.
 
 #### Installation
 
-1. **Install Python dependencies**:
+1. **Install Python dependencies** (from the `scripts/` directory):
    ```bash
-   pip install pyserial matplotlib
+   cd scripts
+   pip install -r requirements.txt
    ```
-
-2. **Find your serial port**:
-   - **Windows**: Check Device Manager → Ports (COM & LPT) or use `idf.py -p PORT monitor` to test
-   - **Linux**: Usually `/dev/ttyUSB0` or `/dev/ttyACM0`. Check with `ls /dev/tty*`
-   - **macOS**: Usually `/dev/cu.usbserial-*` or `/dev/cu.SLAB_USBtoUART`. Check with `ls /dev/cu.*`
 
 #### Scripts
 
-1. **aircube_logger.py** - Data Logger
+1. **aircube_app.py** - Desktop Application (recommended)
    
-   Logs sensor data from serial port to CSV file in real-time.
-   
-   **Configuration**: Edit the script to set:
-   ```python
-   PORT = "COM3"      # Your serial port
-   BAUD = 115200      # Baud rate (default: 115200)
-   CSV_FILE = "sensor_log.csv"  # Output filename
-   ```
+   A full graphical application for monitoring your AirCube in real-time.
    
    **Usage**:
    ```bash
    cd scripts
+   python aircube_app.py
+   ```
+   
+   **Features**:
+   - **Port selection**: Dropdown to select serial port with refresh button
+   - **One-click connect/disconnect**: Green Connect button, red Disconnect button
+   - **Live sensor display**: Large, easy-to-read current values for Temperature, Humidity, AQI, eCO2, and eTVOC
+   - **Color-coded AQI**: Value changes color based on air quality (green = good, yellow = moderate, orange = unhealthy, red = hazardous)
+   - **Historical plots**: Three-panel chart showing Temperature/Humidity, AQI, and Gas levels over time
+   - **CSV logging**: Optional checkbox to log data to CSV file (compatible with replay script)
+   - **Configurable history**: Adjust how many data points to display (50-1000)
+   - **Status bar**: Shows connection status and sample count
+
+2. **aircube_logger.py** - Headless data logger
+   
+   Logs sensor data from serial to CSV only (no display). Use when matplotlib is not available or you only need a file. The standalone app with `--csv` replaces this for most use cases.
+   
+   **Configuration**: Edit the script to set `PORT`, `BAUD`, `CSV_FILE`.
+   
+   **Usage**:
+   ```bash
    python aircube_logger.py
    ```
-   
-   The script will:
-   - Create `sensor_log.csv` if it doesn't exist
-   - Append new sensor readings as they arrive
-   - Display logged data in the terminal
-   - Press `Ctrl+C` to stop logging
 
-2. **aircube_data_visualizer.py** - Live Data Visualization
+3. **aircube_data_visualizer.py** - CSV-only live viewer
    
-   Real-time visualization of sensor data from the CSV file.
+   Watches a CSV file and displays live plots (no serial connection). Use when the cube is not connected but you have a CSV being written by another process.
    
-   **Configuration**: Edit the script to set:
-   ```python
-   CSV_FILE = "sensor_log.csv"  # Path to your CSV file
-   MAX_POINTS = 300             # Number of recent samples to display
-   UPDATE_INTERVAL_MS = 1000    # Refresh rate in milliseconds
-   ```
+   **Configuration**: Edit the script to set `CSV_FILE`, `MAX_POINTS`, `UPDATE_INTERVAL_MS`.
    
    **Usage**:
    ```bash
-   cd scripts
    python aircube_data_visualizer.py
    ```
-   
-   The script will:
-   - Display three plots: Temperature/Humidity, AQI, and Gas levels
-   - Auto-update as new data is logged
-   - Show the last 300 samples (configurable)
-   - Close the window to stop
 
-3. **aircube_replay_script.py** - Data Replay
+4. **aircube_replay_script.py** - Data replay
    
-   Replays logged sensor data with timestamp-based timing for analysis.
+   Replays logged sensor data from a CSV with timestamp-based timing for analysis.
    
-   **Configuration**: Edit the script to set:
-   ```python
-   CSV_FILE = "sensor_log.csv"  # Path to your CSV file
-   SPEED = 5.0                   # Playback speed (1.0 = real-time, 2.0 = 2x faster)
-   MAX_POINTS = 300              # Number of samples to display
-   ```
+   **Configuration**: Edit the script to set `CSV_FILE`, `SPEED`, `MAX_POINTS`.
    
    **Usage**:
    ```bash
-   cd scripts
    python aircube_replay_script.py
    ```
    
-   The script will:
-   - Load all data from the CSV
-   - Replay it at the specified speed
-   - Show the same visualization as the live viewer
-   - Useful for analyzing historical data patterns
+   The script will load the CSV, replay at the specified speed, and show the same three-panel visualization.
+
+#### Building a Standalone Executable
+
+You can build a standalone `.exe` (Windows) or app bundle (macOS) that doesn't require Python:
+
+1. **Install PyInstaller**:
+   ```bash
+   pip install pyinstaller
+   ```
+
+2. **Run the build script**:
+   ```bash
+   cd scripts
+   python build_exe.py
+   ```
+
+3. **Find the executable** in the `dist/` folder:
+   - Windows: `dist/AirCube.exe`
+   - macOS: `dist/AirCube.app`
+   - Linux: `dist/AirCube`
+
+The executable is fully self-contained and can be distributed to users without any Python installation.
+
+**Optional**: Add an `aircube.ico` (Windows) or `aircube.icns` (macOS) file to the `scripts/` folder before building to include a custom app icon.
 
 ## 📡 Serial Protocol
 
@@ -343,6 +344,10 @@ AirCube/
 ├── mechanical/        # 3D enclosure files
 │   └── *.step         # CAD files for 3D printing
 ├── scripts/           # Python utilities
+│   ├── aircube_app.py           # Desktop application (connect + display + optional CSV)
+│   ├── build_exe.py             # Build script for standalone executable
+│   ├── aircube.spec             # PyInstaller spec file
+│   ├── requirements.txt
 │   ├── aircube_logger.py
 │   ├── aircube_data_visualizer.py
 │   └── aircube_replay_script.py
@@ -387,7 +392,7 @@ AirCube/
   - Check if another program is using the port
 
 - **Import errors**:
-  - Install dependencies: `pip install pyserial matplotlib`
+  - Install dependencies: `pip install -r scripts/requirements.txt`
   - Use virtual environment if needed: `python -m venv venv`
 
 ## 🤝 Contributing

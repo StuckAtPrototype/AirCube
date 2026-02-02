@@ -1,0 +1,7 @@
+# Runtime dependencies
+pyserial>=3.5
+matplotlib>=3.3
+PyQt6>=6.4
+
+# Build dependencies (for creating standalone executable)
+# pyinstaller>=6.0

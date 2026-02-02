@@ -8,3 +8,14 @@ venv/
 .DS_Store
 hardware/racer/fp-info-cache
 hardware/racer/racer-backups
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller
+scripts/dist/
+scripts/build/
+*.spec.bak
