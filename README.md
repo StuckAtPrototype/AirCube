@@ -59,7 +59,6 @@ That's it! Your AirCube should now be running and showing live data.
   - RGB LED (WS2812) with color-coded air quality indication
     - Green: Good air quality (AQI 0-10)
     - Yellow to Red: Degrading air quality (AQI 10-200)
-    - Blue (pulsing): Sensor warming up
   - Smooth color transitions
   - Adjustable brightness via button control
 
@@ -214,7 +213,29 @@ Python utilities for connecting to the AirCube, logging, and visualization are i
    - **Configurable history**: Adjust how many data points to display (50-1000)
    - **Status bar**: Shows connection status and sample count
 
-2. **aircube_logger.py** - Headless data logger
+2. **aircube_tray.py** - System Tray Monitor
+   
+   A lightweight app that displays the AQI directly in your Windows taskbar/system tray.
+   
+   **Usage**:
+   ```bash
+   cd scripts
+   python aircube_tray.py
+   ```
+   
+   **Features**:
+   - **Taskbar AQI display**: Shows current AQI number as the tray icon
+   - **Color-coded icon**: Green/yellow/orange/red based on air quality
+   - **Tooltip details**: Hover to see Temperature, Humidity, eCO2, eTVOC
+   - **AQI alerts**: Optional notifications when AQI exceeds threshold
+   - **Start with Windows**: Option to auto-start on login
+   - **Minimal resources**: Runs quietly in the background
+   
+   **Controls**:
+   - Right-click: Open menu (Connect, Settings, Quit)
+   - Double-click: Toggle connection
+
+3. **aircube_logger.py** - Headless data logger
    
    Logs sensor data from serial to CSV only (no display). Use when matplotlib is not available or you only need a file. The standalone app with `--csv` replaces this for most use cases.
    
@@ -249,29 +270,31 @@ Python utilities for connecting to the AirCube, logging, and visualization are i
    
    The script will load the CSV, replay at the specified speed, and show the same three-panel visualization.
 
-#### Building a Standalone Executable
+#### Building Standalone Executables
 
-You can build a standalone `.exe` (Windows) or app bundle (macOS) that doesn't require Python:
+You can build standalone `.exe` files (Windows) that don't require Python:
 
 1. **Install PyInstaller**:
    ```bash
    pip install pyinstaller
    ```
 
-2. **Run the build script**:
+2. **Build the main desktop app**:
    ```bash
    cd scripts
    python build_exe.py
    ```
+   Output: `dist/AirCube.exe` - Full GUI application with charts
 
-3. **Find the executable** in the `dist/` folder:
-   - Windows: `dist/AirCube.exe`
-   - macOS: `dist/AirCube.app`
-   - Linux: `dist/AirCube`
+3. **Build the system tray app**:
+   ```bash
+   python build_tray.py
+   ```
+   Output: `dist/AirCubeTray.exe` - Lightweight taskbar monitor
 
-The executable is fully self-contained and can be distributed to users without any Python installation.
+Both executables are fully self-contained and can be distributed to users without Python.
 
-**Optional**: Add an `aircube.ico` (Windows) or `aircube.icns` (macOS) file to the `scripts/` folder before building to include a custom app icon.
+**Optional**: Add `aircube.ico` or `aircube_tray.ico` to the `scripts/` folder before building for custom icons.
 
 ## 📡 Serial Protocol
 
@@ -311,7 +334,6 @@ The RGB LED provides real-time visual feedback based on air quality:
 
 - **🟢 Green**: AQI 0-10 (Good air quality)
 - **🟡 Yellow to 🔴 Red**: AQI 10-200 (Degrading air quality, smooth gradient)
-- **🔵 Blue (pulsing)**: Sensor warming up (first ~60 seconds after power-on)
 - **Smooth transitions**: Color changes smoothly over ~1 second for pleasant visual experience
 
 **Brightness Control**: Press the button on the device to cycle through brightness levels.
@@ -344,8 +366,10 @@ AirCube/
 ├── mechanical/        # 3D enclosure files
 │   └── *.step         # CAD files for 3D printing
 ├── scripts/           # Python utilities
-│   ├── aircube_app.py           # Desktop application (connect + display + optional CSV)
-│   ├── build_exe.py             # Build script for standalone executable
+│   ├── aircube_app.py           # Desktop application (full GUI with charts)
+│   ├── aircube_tray.py          # System tray monitor (lightweight)
+│   ├── build_exe.py             # Build script for desktop app
+│   ├── build_tray.py            # Build script for tray app
 │   ├── aircube.spec             # PyInstaller spec file
 │   ├── requirements.txt
 │   ├── aircube_logger.py

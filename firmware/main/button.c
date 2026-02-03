@@ -33,11 +33,11 @@ static const char *TAG = "button";
 #define NVS_KEY_BRIGHTNESS "led_brightness"
 
 // Brightness levels array
-static const float brightness_levels[] = {0.0f, 0.3f, 0.6f, 1.0f};
+static const float brightness_levels[] = {0.0f, 0.1f, 0.3f, 0.6f, 1.0f};
 static const int num_brightness_levels = sizeof(brightness_levels) / sizeof(brightness_levels[0]);
 
-// Current brightness index (starts at 0.6, which is index 2)
-static int current_brightness_index = 2;  // 0.6 is the default
+// Current brightness index (starts at 0.6, which is index 3)
+static int current_brightness_index = 3;  // 0.6 is the default
 
 // GPIO interrupt queue
 static QueueHandle_t gpio_evt_queue = NULL;
@@ -91,7 +91,7 @@ static bool load_brightness_from_nvs(int *brightness_index)
         return false;
     }
     
-    int32_t saved_index = 2; // Default index (0.6)
+    int32_t saved_index = 3; // Default index (0.6)
     err = nvs_get_i32(nvs_handle, NVS_KEY_BRIGHTNESS, &saved_index);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGI(TAG, "No saved brightness found in NVS, using default");
@@ -132,7 +132,7 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
  * @brief Button task to handle debouncing and brightness toggling
  * 
  * This task processes button presses with debouncing and cycles through
- * brightness levels: 0.0 -> 0.3 -> 0.6 -> 1.0 -> 0.0
+ * brightness levels: 0.0 -> 0.1 -> 0.3 -> 0.6 -> 1.0 -> 0.0
  */
 static void button_task(void *pvParameters)
 {
@@ -226,7 +226,7 @@ void button_init(void)
     }
     
     // Load saved brightness from NVS, or use default
-    int saved_index = 2; // Default index (0.6)
+    int saved_index = 3; // Default index (0.6)
     if (load_brightness_from_nvs(&saved_index)) {
         current_brightness_index = saved_index;
     }

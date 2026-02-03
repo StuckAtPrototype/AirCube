@@ -30,6 +30,7 @@ int ens16x_read_eco2(void);
 int ens16x_read_aqi(void);
 int ens16x_get_aqi(void);
 enum ENS_STATUS ens16x_get_status(void);
+enum ENS_STATUS ens16x_get_device_status(void);  // Refresh and return current device status
 void ens16x_write_ens210_data(uint8_t * t, uint8_t * h);
 
 #endif //DN680R_ENS16X_DRIVER_H

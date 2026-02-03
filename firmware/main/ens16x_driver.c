@@ -28,7 +28,6 @@ int ens16x_eco2 = -1;
 int ens16x_aqi = -1;
 
 
-enum ENS_STATUS ens16x_get_device_status(void);
 enum ENS_OPMODE ens16x_get_opmode(void);
 void ens16x_set_opmode(enum ENS_OPMODE mode);
 
@@ -42,12 +41,12 @@ enum ENS_STATUS ens16x_get_device_status(void){
 
     // bit 0 = NEWGPR
     // bit 1 = NEWDAT
-    // bit 2-3 = VALIDITY FLAG
+    // bit 2-3 = VALIDITY FLAG (2-bit field: 0=OK, 1=WARM_UP, 2=RESERVED, 3=NO_VALID_OUTPUT)
     // bit 6 = STATER - error invalid operating mode
     // bit 7 = STATS - OPMODE is running
     ens16x_new_data_available = (i2c_data[0] & (1U << 1)) >> 1;
     ens16x_new_gpr_available = (i2c_data[0] & (1U << 0)) >> 0;
-    ens16x_status = (i2c_data[0] & (1U << 2)) >> 2 | (i2c_data[0] & (1U << 3)) >> 3;
+    ens16x_status = (i2c_data[0] >> 2) & 0x03;  // Extract bits 2-3 as 2-bit value
 
     return i2c_data[0];
 
