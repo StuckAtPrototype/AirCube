@@ -7,5 +7,7 @@ idf_component_register(SRCS "main.c"
                                 "i2c_driver.c"
                                 "serial_protocol.c"
                                 "button.c"
+                                "zigbee.c"
                        PRIV_REQUIRES spi_flash esp_driver_rmt esp_driver_i2c esp_driver_uart esp_pm esp_driver_gpio nvs_flash
+                                     espressif__esp-zigbee-lib espressif__esp-zboss-lib
                        INCLUDE_DIRS "")
