@@ -1,0 +1,360 @@
+# Connecting AirCube to Home Assistant
+
+This guide walks you through adding your AirCube air quality monitor to Home Assistant over Zigbee. After setup, you'll have live temperature, humidity, CO2, TVOC, and air quality index readings in your smart home dashboard.
+
+The AirCube works with both **ZHA** (built-in) and **Zigbee2MQTT**. Pick whichever you already use. If you're starting fresh, ZHA is simpler.
+
+---
+
+## What You Need
+
+- **AirCube** -- powered via USB-C
+- **Zigbee coordinator dongle** -- plugs into your Home Assistant machine
+- **Home Assistant** -- running on any supported hardware (Raspberry Pi, mini PC, etc.)
+
+### Recommended Zigbee Coordinators
+
+Any Zigbee 3.0 coordinator works. If you don't have one yet, the **SONOFF ZBDongle-E** is the easiest to get started with (~$13).
+
+| Dongle | Notes |
+|--------|-------|
+| SONOFF ZBDongle-E | Best value, widely available |
+| SONOFF ZBDongle-P | Proven, large community |
+| ConBee II / III | Also works, popular alternative |
+
+---
+
+# Method A -- ZHA (Recommended)
+
+Use this method if you're using Home Assistant's built-in **Zigbee Home Automation** integration (the default). No extra add-ons required.
+
+## A1 -- Set Up ZHA
+
+If you already have ZHA running with your coordinator, skip to A2.
+
+1. Plug your Zigbee coordinator dongle into your Home Assistant machine.
+2. Go to **Settings > Devices & Services > Add Integration**.
+3. Search for **Zigbee Home Automation (ZHA)** and add it.
+4. Select your coordinator from the serial port list and follow the prompts.
+
+## A2 -- Add the AirCube Quirk
+
+The AirCube uses a custom Zigbee cluster (0xFC01) for air quality data. The quirk below tells ZHA to create **real sensor entities** for CO2, TVOC, and AQI.
+
+1. Install the **File editor** add-on if you don't have it:
+   - **Settings > Add-ons > Add-on Store** -- search **File editor**, install, start it.
+
+2. Open **File editor** from the sidebar.
+
+3. Create a folder called **`custom_zha_quirks`** in your `/config/` directory (the same folder that contains your `configuration.yaml`).
+
+4. Inside `custom_zha_quirks`, create a new file called **`aircube.py`** and paste this content:
+
+```python
+"""StuckAtPrototype AirCube air quality monitor quirk for ZHA."""
+
+from zigpy.quirks import CustomCluster
+from zigpy.quirks.v2 import QuirkBuilder
+from zigpy.zcl.foundation import ZCLAttributeDef
+import zigpy.types as t
+
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+
+
+class AirQualityCluster(CustomCluster):
+    """AirCube custom air quality cluster (0xFC01)."""
+
+    cluster_id = 0xFC01
+    name = "AirCube Air Quality"
+    ep_attribute = "aircube_air_quality"
+
+    class AttributeDefs(CustomCluster.AttributeDefs):
+        eco2 = ZCLAttributeDef(id=0x0000, type=t.uint16_t, is_manufacturer_specific=True)
+        etvoc = ZCLAttributeDef(id=0x0001, type=t.uint16_t, is_manufacturer_specific=True)
+        aqi = ZCLAttributeDef(id=0x0002, type=t.uint16_t, is_manufacturer_specific=True)
+
+
+(
+    QuirkBuilder("StuckAtPrototype", "AirCube")
+    .replaces(AirQualityCluster, endpoint_id=10)
+    .sensor(
+        AirQualityCluster.AttributeDefs.eco2.name,
+        AirQualityCluster.cluster_id,
+        endpoint_id=10,
+        unit="ppm",
+        device_class=SensorDeviceClass.CO2,
+        state_class=SensorStateClass.MEASUREMENT,
+        fallback_name="eCO2",
+    )
+    .sensor(
+        AirQualityCluster.AttributeDefs.etvoc.name,
+        AirQualityCluster.cluster_id,
+        endpoint_id=10,
+        unit="ppb",
+        device_class=SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS,
+        state_class=SensorStateClass.MEASUREMENT,
+        fallback_name="eTVOC",
+    )
+    .sensor(
+        AirQualityCluster.AttributeDefs.aqi.name,
+        AirQualityCluster.cluster_id,
+        endpoint_id=10,
+        device_class=SensorDeviceClass.AQI,
+        state_class=SensorStateClass.MEASUREMENT,
+        fallback_name="AQI",
+    )
+    .add_to_registry()
+)
+```
+
+5. Open your main **`configuration.yaml`** (in `/config/`) and add:
+
+   ```yaml
+   zha:
+     custom_quirks_path: /config/custom_zha_quirks
+     enable_quirks: true
+   ```
+
+   If you already have a `zha:` section, just add the two lines underneath it.
+
+6. **Restart Home Assistant** from **Settings > System > Restart**.
+7. **Remove and re-pair** the AirCube once after adding the quirk (ZHA caches device data at first join).
+
+## A3 -- Pair the AirCube
+
+1. Go to **Settings > Devices & Services > ZHA**.
+2. Click **Add Device**.
+3. **Plug in your AirCube** via USB-C. On first power-up, it automatically enters pairing mode.
+
+   > **Already plugged in?** Hold the button on the AirCube for **3 seconds**. The LEDs will start flashing blue.
+
+4. Wait 10-30 seconds. The AirCube will appear in ZHA. Give it a name like `AirCube Living Room`.
+
+5. When the LEDs stop flashing blue and return to a steady color, pairing is complete.
+
+## A4 -- Verify Sensors
+
+Go to **Settings > Devices & Services > ZHA** and click on the AirCube device. You should see five sensors:
+
+| Sensor | What It Measures | Unit |
+|--------|-----------------|------|
+| Temperature | Room temperature | C |
+| Humidity | Relative humidity | % |
+| CO2 | Carbon dioxide (estimated) | ppm |
+| TVOC | Volatile organic compounds | ppb |
+| Air Quality Index | Air quality | -- |
+
+> Temperature and humidity are detected automatically by ZHA. CO2, TVOC, and AQI come from the custom quirk.
+
+---
+
+# Method B -- Zigbee2MQTT
+
+Use this method if you prefer Zigbee2MQTT or already have it running.
+
+## B1 -- Install MQTT Broker
+
+1. Go to **Settings > Add-ons > Add-on Store**.
+2. Search for **Mosquitto broker**, click **Install**, then **Start**.
+3. Go to **Settings > Devices & Services > Add Integration**.
+4. Search for **MQTT** and add it. Accept the defaults.
+
+## B2 -- Install Zigbee2MQTT
+
+1. Go to **Settings > Add-ons > Add-on Store**.
+2. Click the **three-dot menu** (top-right) > **Repositories**.
+3. Add this URL:
+   ```
+   https://github.com/zigbee2mqtt/hassio-zigbee2mqtt
+   ```
+4. Search for **Zigbee2MQTT** and click **Install**.
+
+## B3 -- Plug In Your Coordinator
+
+1. Plug the Zigbee dongle into your Home Assistant machine.
+2. Go to **Settings > System > Hardware** > three-dot menu > **All Hardware**.
+3. Find your dongle. Write down its path (e.g. `/dev/ttyACM0`).
+
+## B4 -- Configure and Start Zigbee2MQTT
+
+1. Go to **Settings > Add-ons > Zigbee2MQTT > Configuration** tab.
+2. Set the serial port:
+   ```yaml
+   serial:
+     port: /dev/ttyACM0
+   ```
+3. Enable **Start on boot** and **Watchdog**, then click **Start**.
+
+## B5 -- Add the AirCube Converter
+
+1. Open **File editor** (install from Add-on Store if needed).
+2. Navigate to the `zigbee2mqtt` folder.
+3. Create a new file called **`aircube.js`** and paste:
+
+```javascript
+const {temperature, humidity} = require('zigbee-herdsman-converters/lib/modernExtend');
+const exposes = require('zigbee-herdsman-converters/lib/exposes');
+const e = exposes.presets;
+
+const definition = {
+    zigbeeModel: ['AirCube'],
+    model: 'AirCube',
+    vendor: 'StuckAtPrototype',
+    description: 'AirCube air quality monitor',
+    extend: [temperature(), humidity()],
+    fromZigbee: [{
+        cluster: 0xFC01,
+        type: ['attributeReport', 'readResponse'],
+        convert: (model, msg, publish, options, meta) => {
+            const result = {};
+            if (msg.data.hasOwnProperty(0x0000)) result.co2 = msg.data[0x0000];
+            if (msg.data.hasOwnProperty(0x0001)) result.voc = msg.data[0x0001];
+            if (msg.data.hasOwnProperty(0x0002)) result.aqi = msg.data[0x0002];
+            return result;
+        },
+    }],
+    toZigbee: [],
+    exposes: [
+        e.numeric('co2', exposes.access.STATE).withUnit('ppm')
+            .withDescription('Carbon dioxide concentration')
+            .withValueMin(400).withValueMax(8192),
+        e.numeric('voc', exposes.access.STATE).withUnit('ppb')
+            .withDescription('Total volatile organic compounds')
+            .withValueMin(0).withValueMax(65535),
+        e.numeric('aqi', exposes.access.STATE)
+            .withDescription('Air Quality Index')
+            .withValueMin(0).withValueMax(500),
+    ],
+    configure: async (device, coordinatorEndpoint) => {
+        const endpoint = device.getEndpoint(10);
+        await endpoint.bind('msTemperatureMeasurement', coordinatorEndpoint);
+        await endpoint.bind('msRelativeHumidity', coordinatorEndpoint);
+        await endpoint.configureReporting('msTemperatureMeasurement', [{
+            attribute: 'measuredValue', minimumReportInterval: 1,
+            maximumReportInterval: 60, reportableChange: 50,
+        }]);
+        await endpoint.configureReporting('msRelativeHumidity', [{
+            attribute: 'measuredValue', minimumReportInterval: 1,
+            maximumReportInterval: 60, reportableChange: 100,
+        }]);
+    },
+};
+
+module.exports = definition;
+```
+
+4. Open **`configuration.yaml`** in the `zigbee2mqtt` folder and add:
+
+   ```yaml
+   external_converters:
+     - aircube.js
+   ```
+
+5. **Restart Zigbee2MQTT** from the add-on page.
+
+## B6 -- Pair the AirCube
+
+1. In the Zigbee2MQTT dashboard, click **Permit join (All)**.
+2. **Plug in your AirCube** via USB-C (or hold the button 3 seconds if already plugged in).
+3. Wait for the LEDs to stop flashing blue.
+4. Name the device in Zigbee2MQTT (e.g. `AirCube Living Room`).
+
+## B7 -- Verify Sensors
+
+Go to **Settings > Devices & Services > MQTT** and click on the AirCube. You should see the same five sensors: Temperature, Humidity, CO2, VOC, and AQI.
+
+---
+
+# Dashboard
+
+These cards work with both ZHA and Zigbee2MQTT.
+
+### Quick Entities Card
+
+Edit your dashboard, click **Add Card**, choose **Entities**, and select:
+- AirCube Temperature
+- AirCube Humidity
+- AirCube CO2
+- AirCube VOC / TVOC
+- AirCube AQI
+
+### AQI Gauge
+
+Add a **Manual card** and paste:
+
+```yaml
+type: gauge
+entity: sensor.aircube_living_room_air_quality_index
+name: Air Quality
+min: 0
+max: 200
+severity:
+  green: 0
+  yellow: 50
+  red: 100
+```
+
+### 24-Hour History
+
+```yaml
+type: history-graph
+title: Air Quality - Last 24 Hours
+hours_to_show: 24
+entities:
+  - entity: sensor.aircube_living_room_temperature
+  - entity: sensor.aircube_living_room_humidity
+  - entity: sensor.aircube_living_room_air_quality_index
+```
+
+> Entity names depend on what you named the device. Check **Settings > Devices & Services** for the exact entity IDs.
+
+---
+
+## LED Reference
+
+| LED Behavior | Meaning |
+|-------------|---------|
+| Steady green | Good air quality (AQI 0-10) |
+| Yellow to red gradient | Degrading air quality (AQI 10-200) |
+| Flashing blue | Pairing mode (searching for Zigbee network) |
+| Off | Brightness set to 0 (press button to cycle) |
+
+### Button
+
+| Action | Result |
+|--------|--------|
+| Short press | Cycle LED brightness (off, 10%, 30%, 60%, 100%) |
+| Hold 3 seconds | Enter Zigbee pairing mode (LEDs flash blue) |
+
+---
+
+## Troubleshooting
+
+### The AirCube LEDs flash blue but it never connects
+
+- Make sure pairing/permit join is enabled in ZHA or Zigbee2MQTT.
+- Move the AirCube closer to the coordinator. Zigbee works best within 10-30 meters indoors.
+- Check that your coordinator is online in the integration dashboard.
+
+### Temperature and humidity show up but CO2 / TVOC / AQI are missing
+
+- The custom quirk (ZHA) or converter (Z2M) is not loaded.
+- **ZHA:** Check that `custom_quirks_path` is set in `configuration.yaml` and the `aircube.py` file is in the right folder. Restart Home Assistant, then remove and re-pair the AirCube.
+- **Firmware:** Make sure you are running the latest AirCube firmware from this repo. It actively sends attribute reports for the custom cluster so ZHA updates the sensors.
+- **Z2M:** Check that `external_converters` is in the Z2M `configuration.yaml` and `aircube.js` is in the `zigbee2mqtt` folder. Restart Zigbee2MQTT.
+
+### CO2 / VOC / AQI values are stuck at 0
+
+This is normal for the first 5 minutes after power-on. The air quality sensor needs to warm up. Once ready, values will start updating (typically within 60 seconds).
+
+### I want to pair the AirCube to a different Home Assistant
+
+Hold the button for 3 seconds to re-enter pairing mode. If the device won't leave its old network, unplug it, plug it back in, and immediately hold the button for 3 seconds while it boots.
+
+### Sensor values only update once a minute
+
+This is by design. The AirCube reports new values every 60 seconds, or immediately when a reading changes significantly (temperature by 0.5 C, AQI by 5 points, etc.).
+
+### Can I use multiple AirCubes?
+
+Yes. The quirk/converter applies to every AirCube automatically. Just pair each one and give it a unique name. Each gets its own set of five sensors.
