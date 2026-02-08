@@ -19,5 +19,14 @@ void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float h
 // Process incoming commands (call periodically)
 void serial_process_commands(void);
 
+// Send history info as JSON
+void serial_send_history_info(void);
+
+// Send a page of history data as JSON
+void serial_send_history_page(uint16_t start, uint16_t count);
+
+// Clear history and send confirmation
+void serial_send_history_clear(void);
+
 #endif // SERIAL_PROTOCOL_H
 

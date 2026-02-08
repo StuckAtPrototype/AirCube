@@ -12,12 +12,13 @@
 #include "i2c_driver.h"
 #include "serial_protocol.h"
 #include "button.h"
+#include "history.h"
 
 static const char *TAG = "main";
 
 #define SENSOR_TASK_STACK_SIZE 4096
 #define SENSOR_TASK_PRIORITY 5
-#define COMMAND_TASK_STACK_SIZE 2048
+#define COMMAND_TASK_STACK_SIZE 4096
 #define COMMAND_TASK_PRIORITY 4
 
 // Configurable sensor readout period (default 1000ms)
@@ -230,6 +231,10 @@ void sensor_task(void *pvParameters)
         serial_send_sensor_data(ens210_status, temp_c, humidity,
                                ens16x_status_str, etvoc, eco2, aqi);
         
+        // Record sample into history accumulator and check for 10-min flush
+        history_record_sample(temp_c, humidity, aqi, eco2, etvoc);
+        history_check_flush();
+        
         // Wait for configurable period before next reading
         uint32_t period = get_sensor_readout_period_ms();
         vTaskDelay(period / portTICK_PERIOD_MS);
@@ -240,12 +245,12 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "AirCube");
 
-    // Configure power management with automatic light sleep
-    // Note: ESP32-H2 uses the same structure as ESP32-C2 (both RISC-V based)
-    esp_pm_config_esp32c2_t pm_config = {
-        .max_freq_mhz = 10,           // Maximum CPU frequency (MHz)
-        .min_freq_mhz = 10,            // Minimum CPU frequency (MHz)
-        .light_sleep_enable = false    // Enable automatic light sleep when idle
+    // Configure power management
+    // ESP32-H2 valid max frequencies: 96, 64, or 48 MHz. Min = XTAL = 32 MHz.
+    esp_pm_config_t pm_config = {
+        .max_freq_mhz = 48,            // Maximum CPU frequency (MHz)
+        .min_freq_mhz = 32,            // Minimum CPU frequency (XTAL, MHz)
+        .light_sleep_enable = false     // Automatic light sleep when idle
     };
     
     esp_err_t ret = esp_pm_configure(&pm_config);
@@ -293,6 +298,12 @@ void app_main(void)
     // // Play startup animation (3 second sweep from green to red and back)
     // ESP_LOGI(TAG, "Playing startup animation");
     // startup_animation();
+    
+    // Initialize history module (sensor data logging to flash)
+    esp_err_t hist_ret = history_init();
+    if (hist_ret != ESP_OK) {
+        ESP_LOGW(TAG, "History init failed: %s (continuing without history)", esp_err_to_name(hist_ret));
+    }
     
     // Initialize button for brightness control
     button_init();
