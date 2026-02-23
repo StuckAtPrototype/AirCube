@@ -49,7 +49,7 @@ void serial_protocol_init(void)
 }
 
 void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float humidity,
-                             const char* ens16x_status_str, int etvoc, int eco2, int aqi)
+                             const char* ens16x_status_str, int etvoc, int eco2, int aqi, int aqi_uba)
 {
     char json_buffer[JSON_OUTPUT_BUF_SIZE];
     
@@ -62,10 +62,10 @@ void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float h
     // Format JSON output
     int len = snprintf(json_buffer, sizeof(json_buffer),
         "{\"ens210\":{\"status\":%u,\"temperature_c\":%.2f,\"temperature_f\":%.2f,\"humidity\":%.2f},"
-        "\"ens16x\":{\"status\":\"%s\",\"etvoc\":%d,\"eco2\":%d,\"aqi\":%d},"
+        "\"ens16x\":{\"status\":\"%s\",\"etvoc\":%d,\"eco2\":%d,\"aqi\":%d,\"aqi_uba\":%d},"
         "\"timestamp\":%lu}\n",
         ens210_status, temperature_c, temperature_f, humidity,
-        ens16x_status_str, etvoc, eco2, aqi,
+        ens16x_status_str, etvoc, eco2, aqi, aqi_uba,
         (unsigned long)timestamp);
     
     if (len > 0 && len < sizeof(json_buffer)) {

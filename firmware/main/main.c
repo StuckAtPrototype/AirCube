@@ -194,6 +194,7 @@ void sensor_task(void *pvParameters)
         int etvoc = ens16x_read_etvoc();
         int eco2 = ens16x_read_eco2();
         int aqi = ens16x_read_aqi();
+        int aqi_uba = ens16x_read_aqi_uba();
         enum ENS_STATUS ens16x_status = ens16x_get_status();
         
         // Update global variables for LED color mapping
@@ -224,12 +225,12 @@ void sensor_task(void *pvParameters)
         ESP_LOGI(TAG, "=== Sensor Data ===");
         ESP_LOGI(TAG, "ENS210 - Status: 0x%02X, Temperature: %.2f°C, Humidity: %.2f%%", 
                  ens210_status, temp_c, humidity);
-        ESP_LOGI(TAG, "ENS16X - Status: %s, eTVOC: %d ppb, eCO2: %d ppm, AQI: %d", 
-                 ens16x_status_str, etvoc, eco2, aqi);
+        ESP_LOGI(TAG, "ENS16X - Status: %s, eTVOC: %d ppb, eCO2: %d ppm, AQI-S: %d, AQI-UBA: %d", 
+                 ens16x_status_str, etvoc, eco2, aqi, aqi_uba);
         
         // Send sensor data as JSON over serial
         serial_send_sensor_data(ens210_status, temp_c, humidity,
-                               ens16x_status_str, etvoc, eco2, aqi);
+                               ens16x_status_str, etvoc, eco2, aqi, aqi_uba);
         
         // Record sample into history accumulator and check for 10-min flush
         history_record_sample(temp_c, humidity, aqi, eco2, etvoc);

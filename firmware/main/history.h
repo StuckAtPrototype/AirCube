@@ -1,6 +1,6 @@
 //
 // History Module Header
-// Append-only ring buffer for 14-day sensor history on flash partition
+// Append-only ring buffer for 7-day sensor history on flash partition
 //
 
 #ifndef HISTORY_H
@@ -16,10 +16,10 @@
 #define HISTORY_SLOTS_PER_SECTOR  (HISTORY_SECTOR_SIZE / HISTORY_SLOT_SIZE)  // 128
 #define HISTORY_NUM_SECTORS       17
 #define HISTORY_TOTAL_SLOTS       (HISTORY_NUM_SECTORS * HISTORY_SLOTS_PER_SECTOR)  // 2176
-#define HISTORY_MAX_VALID_ENTRIES 2016  // 144/day x 14 days
+#define HISTORY_MAX_VALID_ENTRIES 2016  // 288/day x 7 days
 
 // Timing
-#define HISTORY_WINDOW_US         (10ULL * 60ULL * 1000000ULL)  // 10 minutes
+#define HISTORY_WINDOW_US         (5ULL * 60ULL * 1000000ULL)  // 5 minutes (2016 entries = 7 days)
 // #define HISTORY_WINDOW_US         (10ULL * 1000000ULL)  // 10 seconds (DEBUG)
 // #define HISTORY_WINDOW_US         (1ULL * 1000000ULL)  // 1 second (DEBUG - fast overflow test)
 
