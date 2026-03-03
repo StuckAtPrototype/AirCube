@@ -13,7 +13,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 # Hide console window on Windows when running as a script
@@ -28,7 +28,7 @@ if sys.platform == 'win32':
     QApplication, QSystemTrayIcon, QMenu, QDialog, QVBoxLayout,
     QHBoxLayout, QLabel, QComboBox, QPushButton, QCheckBox,
     QSpinBox, QGroupBox, QMessageBox, QWidget, QFrame, QGridLayout,
-    QFileDialog, QTextEdit, QStackedWidget
+    QFileDialog, QTextEdit, QStackedWidget, QProgressBar
 )
 from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal, QSettings, QPoint, QStandardPaths
 from PyQt6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QColor, QAction, QCursor
@@ -68,6 +68,7 @@ def parse_json_line(line: str) -> Optional[dict]:
             "temperature_c": data["ens210"].get("temperature_c"),
             "humidity": data["ens210"].get("humidity"),
             "aqi": data["ens16x"].get("aqi"),
+            "aqi_uba": data["ens16x"].get("aqi_uba"),
             "eco2": data["ens16x"].get("eco2"),
             "etvoc": data["ens16x"].get("etvoc"),
         }
@@ -76,29 +77,31 @@ def parse_json_line(line: str) -> Optional[dict]:
 
 
 def get_aqi_color(aqi: float) -> QColor:
-    """Get color based on AQI value."""
+    """Get color based on ScioSense AQI-S value (0-500)."""
     if aqi <= 50:
-        return QColor("#4CAF50")  # Green - Good
+        return QColor("#4CAF50")  # Green - Excellent
     elif aqi <= 100:
+        return QColor("#8BC34A")  # Light green - Good
+    elif aqi <= 150:
         return QColor("#FFC107")  # Yellow - Moderate
-    elif aqi <= 150:
-        return QColor("#FF9800")  # Orange - Unhealthy for sensitive
-    else:
-        return QColor("#F44336")  # Red - Unhealthy
-
-
-def get_aqi_label(aqi: float) -> str:
-    """Get text label for AQI level."""
-    if aqi <= 50:
-        return "Good"
-    elif aqi <= 100:
-        return "Moderate"
-    elif aqi <= 150:
-        return "Bad"
     elif aqi <= 200:
-        return "Unhealthy"
+        return QColor("#FF9800")  # Orange - Poor
+    elif aqi <= 300:
+        return QColor("#F44336")  # Red - Unhealthy
     else:
-        return "Very Unhealthy"
+        return QColor("#9C27B0")  # Purple - Hazardous
+
+
+def get_aqi_uba_label(aqi_uba: int) -> str:
+    """Get text label for AQI-UBA level (1-5, from ENS161 register 0x21)."""
+    labels = {
+        1: "Excellent",
+        2: "Good",
+        3: "Moderate",
+        4: "Poor",
+        5: "Unhealthy",
+    }
+    return labels.get(aqi_uba, "--")
 
 
 def create_aqi_icon(aqi: Optional[float] = None, connected: bool = False) -> QIcon:
@@ -230,10 +233,74 @@ class MiniChart(FigureCanvas):
         self.ax.spines['left'].set_color('#555')
         self.ax.spines['right'].set_color('#555')
         self.fig.tight_layout(pad=1.0)
+        
+        # Hover tooltip
+        self._annot = self.ax.annotate("", xy=(0, 0), xytext=(10, 10),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.3", fc="#333", ec="#666", alpha=0.9),
+            color="white", fontsize=8, zorder=100)
+        self._annot.set_visible(False)
+        self._hover_data = None   # (x_vals, y_vals, fmt_func)
+        self._hover_extra = None  # optional (min_vals, max_vals) for history
+        self._scatter_dot = None  # highlight dot on hover
+        self.mpl_connect("motion_notify_event", self._on_hover)
+    
+    def _on_hover(self, event):
+        """Show tooltip when hovering over chart data."""
+        if event.inaxes != self.ax or self._hover_data is None:
+            if self._annot.get_visible():
+                self._annot.set_visible(False)
+                if self._scatter_dot:
+                    self._scatter_dot.set_visible(False)
+                self.draw_idle()
+            return
+        
+        x_vals, y_vals, fmt_func = self._hover_data
+        if not x_vals or not y_vals:
+            return
+        
+        # Find nearest data point by x position
+        import numpy as np
+        x_arr = np.array([mdates.date2num(t) if isinstance(t, datetime) else t for t in x_vals])
+        idx = int(np.argmin(np.abs(x_arr - event.xdata)))
+        
+        x_pt = x_vals[idx]
+        y_pt = y_vals[idx]
+        
+        # Skip NaN values
+        if isinstance(y_pt, float) and y_pt != y_pt:
+            self._annot.set_visible(False)
+            if self._scatter_dot:
+                self._scatter_dot.set_visible(False)
+            self.draw_idle()
+            return
+        
+        # Position annotation
+        x_plot = mdates.date2num(x_pt) if isinstance(x_pt, datetime) else x_pt
+        self._annot.xy = (x_plot, y_pt)
+        
+        # Build tooltip text
+        text = fmt_func(idx, x_pt, y_pt)
+        if self._hover_extra:
+            min_vals, max_vals = self._hover_extra
+            text += f"\nMin: {min_vals[idx]:.1f}  Max: {max_vals[idx]:.1f}"
+        
+        self._annot.set_text(text)
+        self._annot.set_visible(True)
+        
+        # Show highlight dot
+        if self._scatter_dot:
+            self._scatter_dot.set_visible(False)
+        self._scatter_dot = self.ax.scatter([x_plot], [y_pt], color='white',
+                                            s=25, zorder=99, edgecolors='#888', linewidths=0.5)
+        
+        self.draw_idle()
     
     def update_chart(self, time_data, value_data, label='AQI', color='#4CAF50', unit=''):
         self.ax.cla()
         self.ax.set_facecolor('#2b2b2b')
+        self._scatter_dot = None
+        self._hover_extra = None
         
         if time_data and value_data:
             self.ax.plot(time_data, value_data, color=color, linewidth=1.5)
@@ -243,12 +310,28 @@ class MiniChart(FigureCanvas):
             self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
             self.ax.xaxis.set_major_locator(mdates.AutoDateLocator())
             self.fig.autofmt_xdate(rotation=45, ha='right')
+            
+            # Store hover data
+            unit_str = f" {unit}" if unit else ''
+            def fmt_live(idx, x, y):
+                return f"{x.strftime('%H:%M:%S')}\n{label}: {y:.1f}{unit_str}"
+            self._hover_data = (list(time_data), list(value_data), fmt_live)
+        else:
+            self._hover_data = None
         
         ylabel = f'{label} ({unit})' if unit else label
         self.ax.set_ylabel(ylabel, color='white', fontsize=9)
         self.ax.set_xlabel('Time', color='white', fontsize=9)
         self.ax.tick_params(colors='white', labelsize=7)
         self.ax.grid(True, linestyle='--', alpha=0.3, color='#555')
+        
+        # Re-create annotation after axes clear
+        self._annot = self.ax.annotate("", xy=(0, 0), xytext=(10, 10),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.3", fc="#333", ec="#666", alpha=0.9),
+            color="white", fontsize=8, zorder=100)
+        self._annot.set_visible(False)
+        
         self.fig.tight_layout(pad=1.5)
         self.draw()
     
@@ -256,6 +339,8 @@ class MiniChart(FigureCanvas):
         """Update chart with device history data (avg line + min/max range band)."""
         self.ax.cla()
         self.ax.set_facecolor('#2b2b2b')
+        self._scatter_dot = None
+        self._hover_extra = None
         
         if x_data and avg_data:
             # Determine x-axis scale based on time range
@@ -263,12 +348,15 @@ class MiniChart(FigureCanvas):
             if range_val < 1:
                 x_plot = [v * 60 for v in x_data]
                 x_label = 'Minutes ago'
+                x_unit = 'min'
             elif range_val < 48:
                 x_plot = list(x_data)
                 x_label = 'Hours ago'
+                x_unit = 'h'
             else:
                 x_plot = [v / 24 for v in x_data]
                 x_label = 'Days ago'
+                x_unit = 'd'
             
             self.ax.plot(x_plot, avg_data, color=color, linewidth=1.5, label='Average')
             if min_data and max_data:
@@ -282,15 +370,32 @@ class MiniChart(FigureCanvas):
             # Invert x so newest (0) is on the right
             self.ax.invert_xaxis()
             self.ax.set_xlabel(x_label, color='white', fontsize=9)
+            
+            # Store hover data
+            unit_str = f" {unit}" if unit else ''
+            def fmt_hist(idx, x, y, _xu=x_unit, _us=unit_str, _lbl=label):
+                return f"{x:.1f} {_xu} ago\n{_lbl}: {y:.1f}{_us}"
+            self._hover_data = (list(x_plot), list(avg_data), fmt_hist)
+            if min_data and max_data:
+                self._hover_extra = (list(min_data), list(max_data))
         else:
             self.ax.text(0.5, 0.5, 'No history data', transform=self.ax.transAxes,
                         ha='center', va='center', color='#666', fontsize=11)
             self.ax.set_xlabel('', color='white', fontsize=9)
+            self._hover_data = None
         
         ylabel = f'{label} ({unit})' if unit else label
         self.ax.set_ylabel(ylabel, color='white', fontsize=9)
         self.ax.tick_params(colors='white', labelsize=7)
         self.ax.grid(True, linestyle='--', alpha=0.3, color='#555')
+        
+        # Re-create annotation after axes clear
+        self._annot = self.ax.annotate("", xy=(0, 0), xytext=(10, 10),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.3", fc="#333", ec="#666", alpha=0.9),
+            color="white", fontsize=8, zorder=100)
+        self._annot.set_visible(False)
+        
         self.fig.tight_layout(pad=1.5)
         self.draw()
 
@@ -302,11 +407,14 @@ class PopupWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(500, 540)
         self._history_slots = []
-        self._window_us = 600_000_000
+        self._window_us = 300_000_000
         self._selected_live_metric = 'aqi'
         self._selected_history_metric = 'aqi'
+        self._live_range = None       # None = all, else minutes
+        self._history_range = None    # None = all, else minutes
         self._use_fahrenheit = True
         self._history_loading = False
+        self._history_fetched_at = None
         self._live_histories = {}
         self._live_sample_count = 0
         self.setup_ui()
@@ -473,6 +581,40 @@ class PopupWindow(QWidget):
         live_metric_layout.addStretch()
         live_layout.addLayout(live_metric_layout)
         
+        # Live time range buttons
+        live_range_layout = QHBoxLayout()
+        live_range_layout.setSpacing(3)
+        
+        range_btn_style = """
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #777;
+                border: 1px solid #3a3a3a;
+                border-radius: 3px;
+                padding: 2px 6px;
+                font-size: 8px;
+            }
+            QPushButton:checked {
+                background-color: #3d5a3d;
+                color: #8f8;
+                border-color: #5a5a5a;
+            }
+        """
+        
+        self._live_range_buttons = {}
+        for minutes, label in [(5, '5m'), (15, '15m'), (30, '30m'),
+                                (60, '1h'), (None, 'All')]:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setStyleSheet(range_btn_style)
+            btn.clicked.connect(lambda checked, m=minutes: self._select_live_range(m))
+            live_range_layout.addWidget(btn)
+            self._live_range_buttons[minutes] = btn
+        
+        self._live_range_buttons[None].setChecked(True)
+        live_range_layout.addStretch()
+        live_layout.addLayout(live_range_layout)
+        
         self.live_chart = MiniChart(self)
         live_layout.addWidget(self.live_chart)
         
@@ -524,12 +666,95 @@ class PopupWindow(QWidget):
         metric_btn_layout.addStretch()
         history_layout.addLayout(metric_btn_layout)
         
+        # History time range buttons
+        hist_range_layout = QHBoxLayout()
+        hist_range_layout.setSpacing(3)
+        
+        range_btn_style_h = """
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #777;
+                border: 1px solid #3a3a3a;
+                border-radius: 3px;
+                padding: 2px 6px;
+                font-size: 8px;
+            }
+            QPushButton:checked {
+                background-color: #3d5a3d;
+                color: #8f8;
+                border-color: #5a5a5a;
+            }
+        """
+        
+        self._hist_range_buttons = {}
+        for minutes, label in [(60, '1h'), (360, '6h'), (1440, '24h'),
+                                (4320, '3d'), (None, '7d')]:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setStyleSheet(range_btn_style_h)
+            btn.clicked.connect(lambda checked, m=minutes: self._select_history_range(m))
+            hist_range_layout.addWidget(btn)
+            self._hist_range_buttons[minutes] = btn
+        
+        self._hist_range_buttons[None].setChecked(True)
+        hist_range_layout.addStretch()
+        history_layout.addLayout(hist_range_layout)
+        
         self.history_chart = MiniChart(self)
         history_layout.addWidget(self.history_chart)
         
+        # Progress bar (hidden by default)
+        self.history_progress = QProgressBar()
+        self.history_progress.setFixedHeight(10)
+        self.history_progress.setTextVisible(False)
+        self.history_progress.setStyleSheet("""
+            QProgressBar {
+                background-color: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 4px;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                border-radius: 3px;
+            }
+        """)
+        self.history_progress.setVisible(False)
+        history_layout.addWidget(self.history_progress)
+        
+        # Status row: label + refresh button
+        status_row = QHBoxLayout()
+        status_row.setSpacing(6)
+        
         self.history_status = QLabel("")
         self.history_status.setStyleSheet("color: #666; font-size: 10px;")
-        history_layout.addWidget(self.history_status, alignment=Qt.AlignmentFlag.AlignRight)
+        status_row.addWidget(self.history_status)
+        
+        status_row.addStretch()
+        
+        self.refresh_btn = QPushButton("↻ Refresh")
+        self.refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #333;
+                color: #aaa;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 2px 8px;
+                font-size: 9px;
+            }
+            QPushButton:hover {
+                background-color: #444;
+                color: white;
+            }
+            QPushButton:disabled {
+                background-color: #2a2a2a;
+                color: #555;
+                border-color: #3a3a3a;
+            }
+        """)
+        self.refresh_btn.setFixedHeight(20)
+        status_row.addWidget(self.refresh_btn)
+        
+        history_layout.addLayout(status_row)
         
         self._view_stack.addWidget(history_page)
         
@@ -576,11 +801,15 @@ class PopupWindow(QWidget):
         eco2 = data.get("eco2")
         etvoc = data.get("etvoc")
         
+        aqi_uba = data.get("aqi_uba")
         if aqi is not None:
             self.aqi_value.setText(str(int(aqi)))
             color = get_aqi_color(aqi)
             self.aqi_value.setStyleSheet(f"color: {color.name()};")
-            self.aqi_status.setText(get_aqi_label(aqi))
+            if aqi_uba is not None:
+                self.aqi_status.setText(get_aqi_uba_label(int(aqi_uba)))
+            else:
+                self.aqi_status.setText("--")
             self.aqi_status.setStyleSheet(f"color: {color.name()};")
         
         if temp_c is not None:
@@ -605,6 +834,9 @@ class PopupWindow(QWidget):
         self._history_loading = False
         self._history_slots = slots
         self._window_us = window_us
+        self._history_fetched_at = datetime.now()
+        self.history_progress.setVisible(False)
+        self.refresh_btn.setEnabled(True)
         n = len(slots)
         if n > 0:
             total_hours = n * window_us / 3_600_000_000
@@ -612,7 +844,8 @@ class PopupWindow(QWidget):
                 span_text = f"{total_hours / 24:.1f} days"
             else:
                 span_text = f"{total_hours:.1f} hours"
-            self.history_status.setText(f"Device history: {n} entries, {span_text}")
+            fetched = self._history_fetched_at.strftime("%H:%M:%S")
+            self.history_status.setText(f"Device history: {n} entries, {span_text} — refreshed {fetched}")
         else:
             self.history_status.setText("No device history available")
         self._render_history_chart()
@@ -620,10 +853,22 @@ class PopupWindow(QWidget):
     def set_history_loading(self, loading):
         """Show loading status while fetching device history."""
         self._history_loading = loading
+        self.refresh_btn.setEnabled(not loading)
         if loading:
             self.history_status.setText("Loading device history...")
+            self.history_progress.setValue(0)
+            self.history_progress.setVisible(True)
             # Show loading state in the chart immediately
             self._render_history_chart()
+        else:
+            self.history_progress.setVisible(False)
+    
+    def set_history_progress(self, current, total):
+        """Update the history fetch progress bar."""
+        if total > 0:
+            pct = int(current * 100 / total)
+            self.history_progress.setValue(pct)
+            self.history_status.setText(f"Loading device history... {current}/{total}")
     
     def _select_live_metric(self, metric):
         """Handle live metric tab button selection."""
@@ -631,6 +876,20 @@ class PopupWindow(QWidget):
         for key, btn in self._live_metric_buttons.items():
             btn.setChecked(key == metric)
         self._render_live_chart()
+    
+    def _select_live_range(self, minutes):
+        """Handle live time range button selection."""
+        self._live_range = minutes
+        for key, btn in self._live_range_buttons.items():
+            btn.setChecked(key == minutes)
+        self._render_live_chart()
+    
+    def _select_history_range(self, minutes):
+        """Handle history time range button selection."""
+        self._history_range = minutes
+        for key, btn in self._hist_range_buttons.items():
+            btn.setChecked(key == minutes)
+        self._render_history_chart()
     
     def _render_live_chart(self):
         """Render the live chart for the selected metric."""
@@ -640,6 +899,20 @@ class PopupWindow(QWidget):
         
         # Map metric key to the live history dict key
         values = self._live_histories.get(metric, [])
+        
+        # Apply time range filter
+        if self._live_range is not None and times:
+            cutoff = datetime.now() - timedelta(minutes=self._live_range)
+            # Find the first index where time >= cutoff
+            start_idx = 0
+            for i, t in enumerate(times):
+                if t >= cutoff:
+                    start_idx = i
+                    break
+            else:
+                start_idx = len(times)  # All data is older than cutoff
+            times = times[start_idx:]
+            values = values[start_idx:]
         
         if not times or not values:
             self.live_chart.ax.cla()
@@ -686,16 +959,25 @@ class PopupWindow(QWidget):
             return
         
         cfg = METRIC_CONFIGS[self._selected_history_metric]
-        n = len(self._history_slots)
         window_hours = self._window_us / 3_600_000_000
+        
+        # Apply time range filter — keep only the most recent N slots
+        slots = self._history_slots
+        if self._history_range is not None:
+            range_hours = self._history_range / 60.0
+            max_slots = int(range_hours / window_hours) if window_hours > 0 else len(slots)
+            if max_slots < len(slots):
+                slots = slots[-max_slots:]
+        
+        n = len(slots)
         
         # x = "hours ago": 0 = most recent, positive values = older
         x = [(n - 1 - i) * window_hours for i in range(n)]
         
         scale = cfg['scale']
-        avg = [s.get(cfg['avg'], 0) * scale for s in self._history_slots]
-        min_v = [s.get(cfg['min'], 0) * scale for s in self._history_slots]
-        max_v = [s.get(cfg['max'], 0) * scale for s in self._history_slots]
+        avg = [s.get(cfg['avg'], 0) * scale for s in slots]
+        min_v = [s.get(cfg['min'], 0) * scale for s in slots]
+        max_v = [s.get(cfg['max'], 0) * scale for s in slots]
         
         # Fahrenheit conversion for temperature
         unit = cfg['unit']
@@ -735,24 +1017,36 @@ class PopupWindow(QWidget):
             cursor.removeSelectedText()
     
     def show_at_cursor(self):
-        # Position near cursor but ensure on screen
+        # Position near cursor but ensure fully on screen
         cursor_pos = QCursor.pos()
-        screen = QApplication.primaryScreen().geometry()
         
-        x = cursor_pos.x() - self.width() // 2
-        y = cursor_pos.y() - self.height() - 20
+        # Use the screen the cursor is actually on (multi-monitor safe)
+        screen_at = QApplication.screenAt(cursor_pos)
+        if screen_at is None:
+            screen_at = QApplication.primaryScreen()
+        avail = screen_at.availableGeometry()  # excludes taskbar
         
-        # Keep on screen
-        if x < screen.left():
-            x = screen.left() + 10
-        if x + self.width() > screen.right():
-            x = screen.right() - self.width() - 10
-        if y < screen.top():
+        w = self.sizeHint().width()
+        h = self.sizeHint().height()
+        
+        x = cursor_pos.x() - w // 2
+        y = cursor_pos.y() - h - 20
+        
+        # Clamp horizontally
+        if x < avail.left():
+            x = avail.left() + 10
+        if x + w > avail.right():
+            x = avail.right() - w - 10
+        
+        # Clamp vertically — if it would go above the screen, show below cursor
+        if y < avail.top():
             y = cursor_pos.y() + 30
+        # If it would go below the available area (past taskbar), push it up
+        if y + h > avail.bottom():
+            y = avail.bottom() - h - 10
         
         self.move(x, y)
         self.show()
-        # Popup will auto-close when user clicks outside (Qt.WindowType.Popup behavior)
 
 
 class SettingsDialog(QDialog):
@@ -909,14 +1203,14 @@ class AirCubeTray(QSystemTrayIcon):
         
         # Device history cache (fetched from device flash)
         self._device_history = []
-        self._device_history_window_us = 600_000_000
+        self._device_history_window_us = 300_000_000
         self._device_history_time = 0
         self._history_fetch_in_progress = False
         self._history_fetch_purpose = None
         self._history_fetch_slots = []
         self._history_fetch_total = 0
         self._history_fetch_start = 0
-        self._history_fetch_window_us = 600_000_000
+        self._history_fetch_window_us = 300_000_000
         self._csv_export_path = ''
         
         # Load persisted history from disk
@@ -924,6 +1218,7 @@ class AirCubeTray(QSystemTrayIcon):
         
         # Popup window
         self.popup = PopupWindow()
+        self.popup.refresh_btn.clicked.connect(self._on_refresh_history_clicked)
         
         self.setup_ui()
         self.update_icon()
@@ -1054,7 +1349,7 @@ class AirCubeTray(QSystemTrayIcon):
         self._history_fetch_slots = []
         self._history_fetch_total = 0
         self._history_fetch_start = 0
-        self._history_fetch_window_us = 600_000_000
+        self._history_fetch_window_us = 300_000_000
         
         self.serial_thread.command_response.connect(self._on_history_fetch_response)
         
@@ -1079,7 +1374,7 @@ class AirCubeTray(QSystemTrayIcon):
         if "history_info" in data:
             info = data["history_info"]
             self._history_fetch_total = info.get("entries", 0)
-            self._history_fetch_window_us = info.get("window_us", 600_000_000)
+            self._history_fetch_window_us = info.get("window_us", 300_000_000)
             
             if self._history_fetch_total == 0:
                 self._complete_history_fetch()
@@ -1097,6 +1392,10 @@ class AirCubeTray(QSystemTrayIcon):
             slots = [s for s in data.get("history", []) if s is not None]
             self._history_fetch_slots.extend(slots)
             self._history_fetch_start += data.get("count", len(slots))
+            
+            # Update progress bar
+            self.popup.set_history_progress(
+                self._history_fetch_start, self._history_fetch_total)
             
             if self._history_fetch_start >= self._history_fetch_total:
                 self._complete_history_fetch()
@@ -1125,7 +1424,7 @@ class AirCubeTray(QSystemTrayIcon):
             pass
         
         self._history_fetch_in_progress = False
-        self.popup.set_device_history([], 600_000_000)
+        self.popup.set_device_history([], 300_000_000)
         
         if self._history_fetch_purpose == 'csv':
             self.showMessage("Device History", "Timeout: device did not respond.",
@@ -1214,6 +1513,13 @@ class AirCubeTray(QSystemTrayIcon):
         
         self.popup.show_at_cursor()
     
+    def _on_refresh_history_clicked(self):
+        """Handle manual history refresh button click."""
+        if (self.is_connected and self.serial_thread
+                and not self._history_fetch_in_progress):
+            self.popup.set_history_loading(True)
+            self._start_history_fetch('display')
+    
     def toggle_connection(self):
         if self.is_connected:
             self.disconnect()
@@ -1244,7 +1550,7 @@ class AirCubeTray(QSystemTrayIcon):
         self._device_history = []
         self._device_history_time = 0
         self._history_fetch_in_progress = False
-        self.popup.set_device_history([], 600_000_000)
+        self.popup.set_device_history([], 300_000_000)
         
         # Insert a gap marker (NaN) so the chart shows a break
         if self.time_history:
@@ -1326,8 +1632,9 @@ class AirCubeTray(QSystemTrayIcon):
             return
         
         aqi = self.last_data.get("aqi")
+        aqi_uba = self.last_data.get("aqi_uba")
         if aqi is not None:
-            status = get_aqi_label(aqi)
+            status = get_aqi_uba_label(int(aqi_uba)) if aqi_uba is not None else "--"
             self.setToolTip(f"AirCube - AQI: {int(aqi)} ({status})\nClick to view details")
         else:
             self.setToolTip("AirCube Tray\nClick to view details")
@@ -1343,7 +1650,7 @@ class AirCubeTray(QSystemTrayIcon):
         if aqi >= self.alert_threshold and not self.alert_shown:
             self.showMessage(
                 "Air Quality Alert",
-                f"AQI has reached {int(aqi)} - {get_aqi_label(aqi)}",
+                f"AQI has reached {int(aqi)} - {get_aqi_uba_label(int(self.last_data.get('aqi_uba', 0)))}",
                 QSystemTrayIcon.MessageIcon.Warning,
                 5000
             )
