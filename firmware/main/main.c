@@ -13,6 +13,7 @@
 #include "serial_protocol.h"
 #include "button.h"
 #include "history.h"
+#include "zigbee.h"
 
 static const char *TAG = "main";
 
@@ -236,6 +237,9 @@ void sensor_task(void *pvParameters)
         history_record_sample(temp_c, humidity, aqi, eco2, etvoc);
         history_check_flush();
         
+        // Push sensor data to Zigbee attributes (reports automatically)
+        zigbee_update_sensors(temp_c, humidity, eco2, etvoc, aqi);
+        
         // Wait for configurable period before next reading
         uint32_t period = get_sensor_readout_period_ms();
         vTaskDelay(period / portTICK_PERIOD_MS);
@@ -317,6 +321,9 @@ void app_main(void)
     ens16x_init();
     ESP_LOGI(TAG, "ENS16X initialized");
     
+    // Initialize Zigbee stack (End Device, auto-joins network on first boot)
+    zigbee_init();
+    
     // Create command processing task
     xTaskCreate(command_task, "command_task", COMMAND_TASK_STACK_SIZE, NULL, 
                 COMMAND_TASK_PRIORITY, NULL);
@@ -327,10 +334,19 @@ void app_main(void)
                 SENSOR_TASK_PRIORITY, NULL);
     ESP_LOGI(TAG, "Sensor task created");
 
-    // Main loop for LED color based on AQI
+    // Main loop for LED color based on AQI (with pairing override)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(20));  // Update LED every 20ms for smooth transitions
         
+        // ── Pairing mode: flash blue at 2 Hz ──
+        if (zigbee_is_pairing()) {
+            uint32_t tick_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+            bool on = ((tick_ms / 250) % 2) == 0;
+            led_set_color(on ? LED_COLOR_BLUE : LED_COLOR_OFF);
+            continue;   // Skip normal AQI color while pairing
+        }
+        
+        // ── Normal mode: AQI-based color ──
         // Determine target hue based on AQI (green at 0, red at 200+)
         if (current_aqi >= AQI_MAX) {
             target_hue = 0;  // Red for high AQI
