@@ -1,444 +1,140 @@
 # AirCube
 
-AirCube is an ESP32-H2 based environmental monitoring device that measures air quality, temperature, and humidity. It provides real-time visual feedback through an RGB LED and communicates sensor data via serial interface.
+**Know your air.** AirCube is a desktop air quality monitor with built-in **Home Assistant** support. It tracks temperature, humidity, CO2, TVOC, and AQI -- showing air quality as a single, glanceable LED color and reporting every reading to your smart home over **Zigbee**.
 
-## 📺 Demo Video
+Works standalone out of the box. Pairs with Home Assistant in minutes.
 
-Watch the AirCube in action: [YouTube Demo](https://youtu.be/m12KpLyLCrw)
+[Watch the demo](https://youtu.be/m12KpLyLCrw) (early build -- Home Assistant integration came after this video)
 
-## 🚀 Quick Start
+---
 
-### Prerequisites
+## Getting Started
 
-- **Hardware**: AirCube device (see Hardware section for build instructions)
-- **Software**:
-  - [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/) v5.0 or later
-  - Python 3.7+ (for data logging/visualization scripts)
-  - USB-C cable for programming and power
+**1. Plug it in** -- Connect the USB-C cable to any USB port or charger. AirCube powers on automatically.
 
-### Getting Started
+**2. Wait for warm-up** -- The air quality sensor needs about 3 minutes to stabilize after power-on. During this time, the LED may not reflect accurate readings.
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/yourusername/AirCube.git
-   cd AirCube
-   ```
+**3. Read the color** -- Once warmed up, the LED tells you everything:
 
-2. **Build and flash the firmware**:
-   ```bash
-   cd firmware
-   idf.py build
-   idf.py -p COM3 flash monitor  # Replace COM3 with your port
-   ```
+| LED Color | Air Quality |
+|-----------|------------|
+| Green | Good |
+| Yellow | Moderate |
+| Orange | Poor |
+| Red | Bad -- consider ventilating |
 
-3. **Run the desktop app**:
-   ```bash
-   cd scripts
-   pip install -r requirements.txt
-   python aircube_app.py
-   ```
-   The AirCube app will open. Select your serial port from the dropdown, click **Connect**, and you're live!
+The color shifts smoothly as conditions change. No app needed -- just glance at it.
 
-That's it! Your AirCube should now be running and showing live data.
+**4. Adjust brightness** -- Press the button to cycle through brightness levels.
 
-## ✨ Features
+That's it. AirCube works out of the box with no setup, no accounts, and no Wi-Fi.
 
-- **Air Quality Monitoring**
-  - eTVOC (equivalent Total Volatile Organic Compounds) in ppb
-  - eCO2 (equivalent CO2) in ppm
-  - AQI (Air Quality Index) calculation
-  - Environmental compensation using temperature and humidity data
+---
 
-- **Environmental Sensors**
-  - Temperature measurement (Celsius/Fahrenheit)
-  - Relative humidity percentage
-  - ENS210 temperature/humidity sensor
-  - ENS161/ENS16X air quality sensor
+## What AirCube Measures
 
-- **Visual Feedback**
-  - RGB LED (WS2812) with color-coded air quality indication
-    - Green: Good air quality (AQI 0-10)
-    - Yellow to Red: Degrading air quality (AQI 10-200)
-  - Smooth color transitions
-  - Adjustable brightness via button control
+| Measurement | What It Tells You |
+|-------------|------------------|
+| **AQI** (Air Quality Index) | Overall air quality score, reflected by the LED color |
+| **eCO2** | Estimated CO2 in ppm -- rises in stuffy or crowded rooms |
+| **eTVOC** | Volatile organic compounds in ppb -- cleaning products, paint, off-gassing |
+| **Temperature** | Room temperature in Celsius |
+| **Humidity** | Relative humidity percentage |
 
-- **Communication**
-  - JSON-based serial protocol (115200 baud)
-  - Configurable sensor readout period
-  - Real-time sensor data streaming
+The LED color is based on the AQI value. To see the individual numbers, connect to a computer or to Home Assistant.
 
-- **Power Management**
-  - Low-power operation support
-  - Configurable CPU frequency
+---
 
-## Hardware
+## Home Assistant Integration
 
-### Components
+AirCube was designed for Home Assistant. It connects over **Zigbee** -- no USB cable to your server, no cloud, no Wi-Fi credentials to configure. Plug it in, pair it, and all five sensors show up on your dashboard automatically.
 
-- **MCU**: ESP32-H2-MINI-1
-- **Sensors**:
-  - ENS210 (Temperature & Humidity)
-  - ENS161/ENS16X (Air Quality)
-- **LED**: WS2812 RGB LED
-- **Interface**: USB-C connector
-- **Power**: USB-C powered
+Once connected you can:
+- **Track air quality over time** with built-in history graphs
+- **Set up automations** -- turn on a fan when CO2 gets too high, send a notification when AQI spikes
+- **Monitor every room** -- each AirCube pairs independently, name them however you like
 
-### PCB Design
+**You'll need:** a Zigbee coordinator dongle (we recommend the [SONOFF ZBDongle-E](https://sonoff.tech/product/gateway-and-sensors/sonoff-zigbee-3-0-usb-dongle-plus-e/), ~$13) plugged into your Home Assistant machine.
 
-PCB design files are located in the `kicad/` directory:
-- KiCad schematic and PCB layout files
-- Gerber files for manufacturing
-- BOM (Bill of Materials)
-- 3D STEP files
+**Works with** ZHA (built-in) and Zigbee2MQTT.
 
-### Mechanical Design
+**Full setup guide:** **[Connecting AirCube to Home Assistant](HOME_ASSISTANT.md)**
 
-3D printed enclosure files are located in the `mechanical/` directory:
-- Top and bottom enclosure parts
-- STEP files for CAD integration
+---
 
-## 💻 Software Setup
+## Connect to Your Computer
 
-### Firmware
+Plug the AirCube into your computer with a **data-capable USB-C cable** to see live readings, charts, and history.
 
-The firmware is built using ESP-IDF and is located in the `firmware/` directory.
+### Download the app
 
-#### Prerequisites
+Check the [Releases](https://github.com/StuckAtPrototype/AirCube/releases) page for a ready-to-run Windows `.exe` -- no install required.
 
-1. **Install ESP-IDF**:
-   - Follow the official [ESP-IDF Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/)
-   - Make sure ESP-IDF v5.0 or later is installed
-   - Set up the environment (run `get_idf` or `export.sh`/`export.bat`)
-
-2. **Install USB drivers** (if needed):
-   - Windows: Install [CP210x USB to UART Bridge drivers](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers)
-   - Linux: Usually works out of the box, may need to add user to `dialout` group
-   - macOS: Usually works out of the box
-
-#### Building and Flashing
-
-1. **Navigate to firmware directory**:
-   ```bash
-   cd firmware
-   ```
-
-2. **Set the target** (ESP32-H2):
-   ```bash
-   idf.py set-target esp32h2
-   ```
-
-3. **Configure the project** (optional):
-   ```bash
-   idf.py menuconfig
-   ```
-   - Adjust serial port settings if needed
-   - Configure power management
-   - Modify sensor readout periods
-
-4. **Build the project**:
-   ```bash
-   idf.py build
-   ```
-
-5. **Flash to device**:
-   ```bash
-   # Windows
-   idf.py -p COM3 flash
-   
-   # Linux/macOS
-   idf.py -p /dev/ttyUSB0 flash
-   ```
-   Replace `COM3` or `/dev/ttyUSB0` with your actual serial port.
-
-6. **Monitor serial output**:
-   ```bash
-   idf.py -p COM3 monitor  # or /dev/ttyUSB0 on Linux/macOS
-   ```
-   Press `Ctrl+]` to exit the monitor.
-
-7. **Flash and monitor in one command**:
-   ```bash
-   idf.py -p COM3 flash monitor
-   ```
-
-#### Firmware Structure
+### Or run from source
 
 ```
-firmware/
-├── main/
-│   ├── main.c              # Main application code
-│   ├── ens210.c/h          # ENS210 temperature/humidity sensor driver
-│   ├── ens16x_driver.c/h   # ENS16X air quality sensor driver
-│   ├── i2c_driver.c/h      # I2C communication driver
-│   ├── led.c/h             # LED control
-│   ├── led_color_lib.c/h   # Color conversion utilities
-│   ├── ws2812_control.c/h  # WS2812 LED driver
-│   ├── button.c/h          # Button input handling
-│   └── serial_protocol.c/h # Serial communication protocol
-├── CMakeLists.txt
-└── sdkconfig              # ESP-IDF configuration
+git clone https://github.com/StuckAtPrototype/AirCube.git
+cd AirCube/scripts
+pip install -r requirements.txt
+python aircube_app.py
 ```
 
-### Python Scripts
+Select your serial port, click **Connect**, and you'll see live data.
 
-Python utilities for connecting to the AirCube, logging, and visualization are in the `scripts/` directory.
+> **Tip:** There's also a lightweight **system tray app** (`aircube_tray.py`) that shows AQI directly in your Windows taskbar. Right-click the tray icon for options.
 
-#### Installation
+---
 
-1. **Install Python dependencies** (from the `scripts/` directory):
-   ```bash
-   cd scripts
-   pip install -r requirements.txt
-   ```
+## LED Reference
 
-#### Scripts
+| LED | Meaning |
+|-----|---------|
+| Steady green | Good air quality (AQI 0--10) |
+| Yellow through red | Degrading to poor air quality (AQI 10--200) |
+| Flashing blue | Zigbee pairing mode |
 
-1. **aircube_app.py** - Desktop Application (recommended)
-   
-   A full graphical application for monitoring your AirCube in real-time.
-   
-   **Usage**:
-   ```bash
-   cd scripts
-   python aircube_app.py
-   ```
-   
-   **Features**:
-   - **Port selection**: Dropdown to select serial port with refresh button
-   - **One-click connect/disconnect**: Green Connect button, red Disconnect button
-   - **Live sensor display**: Large, easy-to-read current values for Temperature, Humidity, AQI, eCO2, and eTVOC
-   - **Color-coded AQI**: Value changes color based on air quality (green = good, yellow = moderate, orange = unhealthy, red = hazardous)
-   - **Historical plots**: Three-panel chart showing Temperature/Humidity, AQI, and Gas levels over time
-   - **CSV logging**: Optional checkbox to log data to CSV file (compatible with replay script)
-   - **Configurable history**: Adjust how many data points to display (50-1000)
-   - **Status bar**: Shows connection status and sample count
+### Button
 
-2. **aircube_tray.py** - System Tray Monitor
-   
-   A lightweight app that displays the AQI directly in your Windows taskbar/system tray.
-   
-   **Usage**:
-   ```bash
-   cd scripts
-   python aircube_tray.py
-   ```
-   
-   **Features**:
-   - **Taskbar AQI display**: Shows current AQI number as the tray icon
-   - **Color-coded icon**: Green/yellow/orange/red based on air quality
-   - **Tooltip details**: Hover to see Temperature, Humidity, eCO2, eTVOC
-   - **AQI alerts**: Optional notifications when AQI exceeds threshold
-   - **Start with Windows**: Option to auto-start on login
-   - **Minimal resources**: Runs quietly in the background
-   
-   **Controls**:
-   - Right-click: Open menu (Connect, Settings, Quit)
-   - Double-click: Toggle connection
+| Action | What It Does |
+|--------|-------------|
+| Short press | Cycle brightness (off, 10%, 30%, 60%, 100%) |
+| Hold 3 seconds | Enter Zigbee pairing mode |
 
-3. **aircube_logger.py** - Headless data logger
-   
-   Logs sensor data from serial to CSV only (no display). Use when matplotlib is not available or you only need a file. The standalone app with `--csv` replaces this for most use cases.
-   
-   **Configuration**: Edit the script to set `PORT`, `BAUD`, `CSV_FILE`.
-   
-   **Usage**:
-   ```bash
-   python aircube_logger.py
-   ```
+---
 
-3. **aircube_data_visualizer.py** - CSV-only live viewer
-   
-   Watches a CSV file and displays live plots (no serial connection). Use when the cube is not connected but you have a CSV being written by another process.
-   
-   **Configuration**: Edit the script to set `CSV_FILE`, `MAX_POINTS`, `UPDATE_INTERVAL_MS`.
-   
-   **Usage**:
-   ```bash
-   python aircube_data_visualizer.py
-   ```
+## Troubleshooting
 
-4. **aircube_replay_script.py** - Data replay
-   
-   Replays logged sensor data from a CSV with timestamp-based timing for analysis.
-   
-   **Configuration**: Edit the script to set `CSV_FILE`, `SPEED`, `MAX_POINTS`.
-   
-   **Usage**:
-   ```bash
-   python aircube_replay_script.py
-   ```
-   
-   The script will load the CSV, replay at the specified speed, and show the same three-panel visualization.
+**LED doesn't turn on**
+- Make sure the USB-C cable is firmly connected and the power source is active.
+- Try a different USB port or charger.
 
-#### Building Standalone Executables
+**Readings seem wrong right after power-on**
+- Normal. The air quality sensor needs about 3 minutes to warm up. Readings will stabilize.
 
-You can build standalone `.exe` files (Windows) that don't require Python:
+**Computer doesn't detect AirCube**
+- Some USB cables are charge-only. Use a cable that supports data.
+- Windows users may need to install [USB drivers](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers).
+- Linux users: add yourself to the `dialout` group and re-login.
 
-1. **Install PyInstaller**:
-   ```bash
-   pip install pyinstaller
-   ```
+**Home Assistant: CO2, TVOC, or AQI sensors are missing**
+- The custom quirk or converter isn't loaded yet. See the [Home Assistant guide](HOME_ASSISTANT.md) for step-by-step instructions.
 
-2. **Build the main desktop app**:
-   ```bash
-   cd scripts
-   python build_exe.py
-   ```
-   Output: `dist/AirCube.exe` - Full GUI application with charts
+**Home Assistant: AirCube won't pair**
+- Make sure permit join is enabled in ZHA or Zigbee2MQTT.
+- Hold the button for 3 seconds to enter pairing mode (LED flashes blue).
+- Move AirCube closer to the coordinator during pairing.
 
-3. **Build the system tray app**:
-   ```bash
-   python build_tray.py
-   ```
-   Output: `dist/AirCubeTray.exe` - Lightweight taskbar monitor
+---
 
-Both executables are fully self-contained and can be distributed to users without Python.
+## Open Source
 
-**Optional**: Add `aircube.ico` or `aircube_tray.ico` to the `scripts/` folder before building for custom icons.
+AirCube is fully open source -- firmware, PCB design, enclosure, desktop software, and Home Assistant integration. Everything is in this repository under the Apache 2.0 license.
 
-## 📡 Serial Protocol
+**Developers and makers:** See the **[Contributing Guide](CONTRIBUTING.md)** for build instructions, architecture docs, serial protocol reference, and how to submit changes.
 
-The device communicates via UART at **115200 baud** using JSON messages.
-
-### Sensor Data Output
-
-The device periodically sends sensor data as JSON (default: every 1000ms, configurable):
-
-```json
-{
-  "timestamp": 1234567890,
-  "ens210": {
-    "status": 0,
-    "temperature_c": 22.5,
-    "temperature_f": 72.5,
-    "humidity": 45.2
-  },
-  "ens16x": {
-    "status": "OK",
-    "etvoc": 50,
-    "eco2": 400,
-    "aqi": 5
-  }
-}
-```
-
-### Commands
-
-Commands can be sent to the device via serial (JSON format). See `firmware/main/serial_protocol.c` for available commands and implementation details.
-
-**Example**: To change the sensor readout period, send a JSON command via serial.
-
-## 💡 LED Color Mapping
-
-The RGB LED provides real-time visual feedback based on air quality:
-
-- **🟢 Green**: AQI 0-10 (Good air quality)
-- **🟡 Yellow to 🔴 Red**: AQI 10-200 (Degrading air quality, smooth gradient)
-- **Smooth transitions**: Color changes smoothly over ~1 second for pleasant visual experience
-
-**Brightness Control**: Press the button on the device to cycle through brightness levels.
-
-## 🏗️ Building the Hardware
-
-### PCB Assembly
-
-1. **Order PCB**: Use the Gerber files in `kicad/gerbers/` to order from your preferred PCB manufacturer
-2. **Order Components**: Use `kicad/AirCube v1.0 BOM.csv` to order components
-3. **Assembly**: Follow the schematic in `kicad/AirCube.kicad_sch` for assembly
-4. **Programming**: Use USB-C connector for programming and power
-
-### 3D Printed Enclosure
-
-1. **Print Files**: Use the STEP files in `mechanical/` directory
-2. **Assembly**: Top and bottom parts snap together
-3. **Mounting**: PCB mounts inside the enclosure
-
-## 📁 Project Structure
-
-```
-AirCube/
-├── firmware/          # ESP-IDF firmware source code
-│   ├── main/          # Main application code
-│   └── CMakeLists.txt # Build configuration
-├── kicad/             # PCB design files (KiCad)
-│   ├── gerbers/       # Manufacturing files
-│   └── *.kicad_*      # KiCad project files
-├── mechanical/        # 3D enclosure files
-│   └── *.step         # CAD files for 3D printing
-├── scripts/           # Python utilities
-│   ├── aircube_app.py           # Desktop application (full GUI with charts)
-│   ├── aircube_tray.py          # System tray monitor (lightweight)
-│   ├── build_exe.py             # Build script for desktop app
-│   ├── build_tray.py            # Build script for tray app
-│   ├── aircube.spec             # PyInstaller spec file
-│   ├── requirements.txt
-│   ├── aircube_logger.py
-│   ├── aircube_data_visualizer.py
-│   └── aircube_replay_script.py
-└── README.md          # This file
-```
-
-## 🐛 Troubleshooting
-
-### Firmware Issues
-
-- **Device not detected**: 
-  - Check USB cable (data-capable, not charge-only)
-  - Install USB drivers (CP210x for Windows)
-  - Check port permissions (Linux: add user to `dialout` group)
-
-- **Build errors**:
-  - Ensure ESP-IDF is properly installed and environment is set up
-  - Run `idf.py fullclean` and rebuild
-  - Check that you've set the target: `idf.py set-target esp32h2`
-
-- **Flash errors**:
-  - Put device in download mode (hold BOOT button, press RESET, release BOOT)
-  - Try lowering baud rate in `menuconfig` → Serial flasher config
-
-### Sensor Issues
-
-- **No sensor data**:
-  - Check I2C connections on PCB
-  - Verify sensor initialization in serial monitor
-  - Ensure sensors are properly powered
-
-- **LED not working**:
-  - Check WS2812 connections
-  - Verify power supply (LEDs need stable 5V)
-  - Check button functionality for brightness control
-
-### Python Script Issues
-
-- **Serial port not found**:
-  - Verify the port name (Windows: `COM3`, Linux: `/dev/ttyUSB0`)
-  - Ensure device is connected and drivers are installed
-  - Check if another program is using the port
-
-- **Import errors**:
-  - Install dependencies: `pip install -r scripts/requirements.txt`
-  - Use virtual environment if needed: `python -m venv venv`
-
-## 🤝 Contributing
-
-Contributions are welcome! Here's how you can help:
-
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/amazing-feature`
-3. **Make your changes** and test thoroughly
-4. **Commit your changes**: `git commit -m 'Add amazing feature'`
-5. **Push to the branch**: `git push origin feature/amazing-feature`
-6. **Open a Pull Request**
-
-### Areas for Contribution
-
-- Additional sensor support
-- Web interface for data visualization
-- Mobile app integration
-- Power optimization improvements
-- Documentation improvements
-- Bug fixes and testing
-
-## 📄 License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+| | |
+|---|---|
+| [Contributing Guide](CONTRIBUTING.md) | Build from source, firmware architecture, serial protocol, how to contribute |
+| [Home Assistant Guide](HOME_ASSISTANT.md) | ZHA and Zigbee2MQTT setup |
+| [GitHub Issues](https://github.com/StuckAtPrototype/AirCube/issues) | Bug reports and feature requests |
+| [License](LICENSE) | Apache 2.0 |
