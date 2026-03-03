@@ -14,6 +14,7 @@
 #define ENS16X_OPMODE 0x10
 #define ENS16X_REG_DATA_ETVOC 0x22
 #define ENS16X_REG_DATA_ECO2 0x24
+#define ENS16X_REG_DATA_AQI_UBA 0x21
 #define ENS16X_REG_DATA_AQI_S 0x26
 
 #define ENS16X_REG_RH_IN 0x15
@@ -26,9 +27,9 @@ uint8_t ens16x_new_gpr_available = 0;
 int ens16x_tvoc = -1;
 int ens16x_eco2 = -1;
 int ens16x_aqi = -1;
+int ens16x_aqi_uba = -1;
 
 
-enum ENS_STATUS ens16x_get_device_status(void);
 enum ENS_OPMODE ens16x_get_opmode(void);
 void ens16x_set_opmode(enum ENS_OPMODE mode);
 
@@ -42,12 +43,12 @@ enum ENS_STATUS ens16x_get_device_status(void){
 
     // bit 0 = NEWGPR
     // bit 1 = NEWDAT
-    // bit 2-3 = VALIDITY FLAG
+    // bit 2-3 = VALIDITY FLAG (2-bit field: 0=OK, 1=WARM_UP, 2=RESERVED, 3=NO_VALID_OUTPUT)
     // bit 6 = STATER - error invalid operating mode
     // bit 7 = STATS - OPMODE is running
     ens16x_new_data_available = (i2c_data[0] & (1U << 1)) >> 1;
     ens16x_new_gpr_available = (i2c_data[0] & (1U << 0)) >> 0;
-    ens16x_status = (i2c_data[0] & (1U << 2)) >> 2 | (i2c_data[0] & (1U << 3)) >> 3;
+    ens16x_status = (i2c_data[0] >> 2) & 0x03;  // Extract bits 2-3 as 2-bit value
 
     return i2c_data[0];
 
@@ -126,8 +127,25 @@ int ens16x_read_aqi(void){
     return aqi;
 }
 
+int ens16x_read_aqi_uba(void){
+    uint8_t i2c_data[1];
+    memset(i2c_data, 0, 1);
+    uint8_t i2c_byte_address[] = {ENS16X_REG_DATA_AQI_UBA};
+    i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 1);
+    int aqi_uba = i2c_data[0] & 0x07;  // AQI-UBA is in bits 0-2
+
+    ESP_LOGI("ens16x", "aqi_uba: %d", aqi_uba);
+    ens16x_aqi_uba = aqi_uba;
+
+    return aqi_uba;
+}
+
 int ens16x_get_aqi(void){
     return ens16x_aqi;
+}
+
+int ens16x_get_aqi_uba(void){
+    return ens16x_aqi_uba;
 }
 
 int ens16x_get_etvoc(void){
@@ -229,16 +247,5 @@ void ens16x_init(void){
 
     ens16x_read_etvoc();
     ens16x_read_aqi();
-
-    // read in the     // read in the AQI UBA index (1 to 5) (1 to 5)
-    i2c_data[0] = 0;
-    i2c_data[1] = 0;
-    i2c_byte_address[0] = 0x21;
-
-    i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 1);
-
-    for(int i = 0; i < 1; i++){
-        ESP_LOGI("ens160", "AQI index (1 to 5) %x", i2c_data[i]);
-    }
-
+    ens16x_read_aqi_uba();
 }

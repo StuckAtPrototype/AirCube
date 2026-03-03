@@ -23,7 +23,7 @@ extern "C" {
  * and sets up an interrupt on rising edge (button press). It also creates
  * a task to handle button debouncing and brightness toggling.
  * 
- * Brightness levels cycle through: 0.0 -> 0.3 -> 0.6 -> 1.0 -> 0.0
+ * Brightness levels cycle through: 0.0 -> 0.1 -> 0.3 -> 0.6 -> 1.0 -> 0.0
  * Default brightness is 0.6.
  */
 void button_init(void);

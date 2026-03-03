@@ -5,7 +5,6 @@
 #include "esp_pm.h"
 #include "nvs_flash.h"
 #include "led_color_lib.h"
-#include <math.h>
 
 #include "led.h"
 #include "ens210.h"
@@ -13,12 +12,13 @@
 #include "i2c_driver.h"
 #include "serial_protocol.h"
 #include "button.h"
+#include "history.h"
 
 static const char *TAG = "main";
 
 #define SENSOR_TASK_STACK_SIZE 4096
 #define SENSOR_TASK_PRIORITY 5
-#define COMMAND_TASK_STACK_SIZE 2048
+#define COMMAND_TASK_STACK_SIZE 4096
 #define COMMAND_TASK_PRIORITY 4
 
 // Configurable sensor readout period (default 1000ms)
@@ -33,10 +33,6 @@ static SemaphoreHandle_t readout_period_mutex = NULL;
 // Global variables to store sensor data for LED color mapping
 static int current_aqi = 0;
 static enum ENS_STATUS current_ens16x_status = ENS_RESERVED;
-
-// Static variables for pulsing effect
-static uint32_t pulse_time_ms = 0;  // Current pulse time in milliseconds (accumulates)
-#define PULSE_MS 50  // Pulse period in milliseconds
 
 // Static variables for smooth LED color transitions
 static float current_hue = 21845.0f;  // Current hue value (21845 = green, 0 = red) - using float for smooth transitions
@@ -155,39 +151,6 @@ static void startup_animation(void) {
     led_set_color(final_color);
 }
 
-/**
- * @brief Get pulsing color effect with intensity support
- * 
- * This function creates a pulsing effect by modulating the brightness of a given
- * color using a sine wave. The pulse goes from 0 to full brightness (255) at peak.
- * The LED task will apply the intensity setting, so the pulse will respect the
- * configured brightness level (pulse peak = intensity * 255).
- * 
- * @param red Red component of the base color (0-255)
- * @param green Green component of the base color (0-255)
- * @param blue Blue component of the base color (0-255)
- * @return 24-bit GRB color value with pulsing brightness (intensity applied by LED task)
- */
-static uint32_t get_pulsing_color_with_intensity(uint8_t red, uint8_t green, uint8_t blue) {
-    // Increment the time (function is called every 20ms)
-    pulse_time_ms += 20;
-    
-    // Calculate the phase of the pulse (0 to 2π) using modulo to wrap around
-    float phase = ((pulse_time_ms % PULSE_MS) / (float)PULSE_MS) * 2 * M_PI;
-
-    // Use a sine wave to create a smooth pulse (range: 0 to 1.0 for full brightness)
-    float pulse_brightness = (sinf(phase) + 1.0f) / 2.0f;  // Range: 0.0 to 1.0
-
-    // Apply the pulse brightness to the specified color (0 to 255)
-    // The LED task will apply the intensity setting, so we pulse to full brightness here
-    float r = pulse_brightness * red;
-    float g = pulse_brightness * green;
-    float b = pulse_brightness * blue;
-
-    // Convert to GRB format for WS2812 LEDs
-    return ((uint32_t)(g + 0.5f) << 16) | ((uint32_t)(r + 0.5f) << 8) | (uint32_t)(b + 0.5f);
-}
-
 // Command processing task
 void command_task(void *pvParameters)
 {
@@ -213,6 +176,10 @@ void sensor_task(void *pvParameters)
         float temp_c = ens210_get_temperature(1); // 1 = Celsius
         float humidity = ens210_get_humidity();
         uint8_t ens210_status = ens210_get_status();
+
+        // we know that the temperature has a 2 degree offset from the real temperature
+        // subtract 2 degrees from the temperature to get the real temperature
+        temp_c -= 2;
         
         // Write ENS210 data to ENS161 for environmental compensation
         uint8_t ens210_t[2];
@@ -220,10 +187,14 @@ void sensor_task(void *pvParameters)
         ens210_get_envir(ens210_t, ens210_h);
         ens16x_write_ens210_data(ens210_t, ens210_h);
         
+        // Refresh ENS16X device status (needed to detect warm-up completion)
+        ens16x_get_device_status();
+        
         // Read ENS16X air quality data
         int etvoc = ens16x_read_etvoc();
         int eco2 = ens16x_read_eco2();
         int aqi = ens16x_read_aqi();
+        int aqi_uba = ens16x_read_aqi_uba();
         enum ENS_STATUS ens16x_status = ens16x_get_status();
         
         // Update global variables for LED color mapping
@@ -254,12 +225,16 @@ void sensor_task(void *pvParameters)
         ESP_LOGI(TAG, "=== Sensor Data ===");
         ESP_LOGI(TAG, "ENS210 - Status: 0x%02X, Temperature: %.2f°C, Humidity: %.2f%%", 
                  ens210_status, temp_c, humidity);
-        ESP_LOGI(TAG, "ENS16X - Status: %s, eTVOC: %d ppb, eCO2: %d ppm, AQI: %d", 
-                 ens16x_status_str, etvoc, eco2, aqi);
+        ESP_LOGI(TAG, "ENS16X - Status: %s, eTVOC: %d ppb, eCO2: %d ppm, AQI-S: %d, AQI-UBA: %d", 
+                 ens16x_status_str, etvoc, eco2, aqi, aqi_uba);
         
         // Send sensor data as JSON over serial
         serial_send_sensor_data(ens210_status, temp_c, humidity,
-                               ens16x_status_str, etvoc, eco2, aqi);
+                               ens16x_status_str, etvoc, eco2, aqi, aqi_uba);
+        
+        // Record sample into history accumulator and check for 10-min flush
+        history_record_sample(temp_c, humidity, aqi, eco2, etvoc);
+        history_check_flush();
         
         // Wait for configurable period before next reading
         uint32_t period = get_sensor_readout_period_ms();
@@ -271,12 +246,12 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "AirCube");
 
-    // Configure power management with automatic light sleep
-    // Note: ESP32-H2 uses the same structure as ESP32-C2 (both RISC-V based)
-    esp_pm_config_esp32c2_t pm_config = {
-        .max_freq_mhz = 10,           // Maximum CPU frequency (MHz)
-        .min_freq_mhz = 10,            // Minimum CPU frequency (MHz)
-        .light_sleep_enable = false    // Enable automatic light sleep when idle
+    // Configure power management
+    // ESP32-H2 valid max frequencies: 96, 64, or 48 MHz. Min = XTAL = 32 MHz.
+    esp_pm_config_t pm_config = {
+        .max_freq_mhz = 48,            // Maximum CPU frequency (MHz)
+        .min_freq_mhz = 32,            // Minimum CPU frequency (XTAL, MHz)
+        .light_sleep_enable = false     // Automatic light sleep when idle
     };
     
     esp_err_t ret = esp_pm_configure(&pm_config);
@@ -325,6 +300,12 @@ void app_main(void)
     // ESP_LOGI(TAG, "Playing startup animation");
     // startup_animation();
     
+    // Initialize history module (sensor data logging to flash)
+    esp_err_t hist_ret = history_init();
+    if (hist_ret != ESP_OK) {
+        ESP_LOGW(TAG, "History init failed: %s (continuing without history)", esp_err_to_name(hist_ret));
+    }
+    
     // Initialize button for brightness control
     button_init();
     
@@ -346,20 +327,14 @@ void app_main(void)
                 SENSOR_TASK_PRIORITY, NULL);
     ESP_LOGI(TAG, "Sensor task created");
 
-    // Main loop for LED color based on sensor status and AQI
+    // Main loop for LED color based on AQI
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(20));  // Update LED every 20ms for smooth transitions
         
-        // Determine target hue based on sensor status and AQI
-        if (current_ens16x_status == ENS_WARM_UP) {
-            // If sensor is warming up, target blue hue
-            // Blue is at 4/6 of the spectrum: (4/6) * 65536 = 43690
-            target_hue = 43690;
-        } else if (current_aqi >= AQI_MAX) {
-            // If AQI is 200+, target red hue (0)
-            target_hue = 0;
+        // Determine target hue based on AQI (green at 0, red at 200+)
+        if (current_aqi >= AQI_MAX) {
+            target_hue = 0;  // Red for high AQI
         } else {
-            // Otherwise, use AQI-based hue (green at 0, red at 200)
             target_hue = aqi_to_hue(current_aqi);
         }
         
@@ -369,12 +344,6 @@ void app_main(void)
         
         // Convert current hue to color (cast to uint16_t for color conversion)
         uint32_t color = get_color_from_hue((uint16_t)current_hue);
-        
-        // Apply pulsing effect if needed
-        if (current_ens16x_status == ENS_WARM_UP) {
-            // Pulse blue
-            color = get_pulsing_color_with_intensity(0, 0, 255);
-        } 
         
         // Update LED with the smoothly transitioning color
         led_set_color(color);
