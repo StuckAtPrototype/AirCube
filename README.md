@@ -85,6 +85,16 @@ Select your serial port, click **Connect**, and you'll see live data.
 
 ---
 
+## Firmware Updates
+
+New firmware releases add features and fix bugs. Updating takes a couple of minutes with just a browser -- no tools to install.
+
+**[Firmware Update Guide](FIRMWARE_UPDATE.md)** -- step-by-step instructions.
+
+Latest release: [GitHub Releases](https://github.com/StuckAtPrototype/AirCube/releases)
+
+---
+
 ## LED Reference
 
 | LED | Meaning |
@@ -135,6 +145,7 @@ AirCube is fully open source -- firmware, PCB design, enclosure, desktop softwar
 | | |
 |---|---|
 | [Contributing Guide](CONTRIBUTING.md) | Build from source, firmware architecture, serial protocol, how to contribute |
+| [Firmware Update Guide](FIRMWARE_UPDATE.md) | Update your AirCube firmware from a browser |
 | [Home Assistant Guide](HOME_ASSISTANT.md) | ZHA and Zigbee2MQTT setup |
 | [GitHub Issues](https://github.com/StuckAtPrototype/AirCube/issues) | Bug reports and feature requests |
 | [License](LICENSE) | Apache 2.0 |
