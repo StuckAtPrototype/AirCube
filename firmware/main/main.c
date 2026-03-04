@@ -321,7 +321,7 @@ void app_main(void)
     ens16x_init();
     ESP_LOGI(TAG, "ENS16X initialized");
     
-    // Initialize Zigbee stack (End Device, auto-joins network on first boot)
+    // Initialize Zigbee stack (End Device, idles until long-press on first boot)
     zigbee_init();
     
     // Create command processing task

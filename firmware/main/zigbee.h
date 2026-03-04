@@ -27,7 +27,9 @@ extern "C" {
  *   - Relative Humidity cluster (0x0405)
  *   - Custom cluster (0xFC01) for eCO2, eTVOC, AQI
  *
- * Automatically begins network steering (joining) on first boot.
+ * On first boot (factory-new), the stack stays idle until the user
+ * triggers pairing via a long button press.  On subsequent boots the
+ * device reconnects to its previously-joined network automatically.
  * Must be called after nvs_flash_init().
  */
 void zigbee_init(void);
