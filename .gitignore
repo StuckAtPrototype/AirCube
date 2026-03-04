@@ -20,3 +20,6 @@ __pycache__/
 scripts/dist/
 scripts/build/
 *.spec.bak
+
+# Local release staging
+releases/
