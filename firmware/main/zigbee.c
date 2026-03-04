@@ -21,6 +21,8 @@
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_zigbee_core.h"
 #include "ha/esp_zigbee_ha_standard.h"
 #include "zcl/esp_zigbee_zcl_command.h"
@@ -82,6 +84,35 @@ static void report_custom_attr(uint16_t attr_id)
     esp_zb_zcl_report_attr_cmd_req(&report_cmd);
 }
 
+/* ── NVS pairing flag (survives the reboot caused by factory_reset) ─── */
+
+#define NVS_NAMESPACE   "aircube"
+#define NVS_KEY_PAIRING "zb_pair_req"
+
+static void set_pairing_flag(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, NVS_KEY_PAIRING, 1);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static bool consume_pairing_flag(void)
+{
+    nvs_handle_t h;
+    uint8_t val = 0;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
+        return false;
+    }
+    bool found = (nvs_get_u8(h, NVS_KEY_PAIRING, &val) == ESP_OK && val);
+    nvs_erase_key(h, NVS_KEY_PAIRING);
+    nvs_commit(h);
+    nvs_close(h);
+    return found;
+}
+
 /* ── ZED configuration macros (matching Espressif examples) ──────────── */
 
 #define AIRCUBE_ZED_CONFIG()                                \
@@ -132,8 +163,14 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             ESP_LOGI(TAG, "Device started up in%s factory-reset mode",
                      esp_zb_bdb_is_factory_new() ? "" : " non");
             if (esp_zb_bdb_is_factory_new()) {
-                ESP_LOGI(TAG, "Start network steering");
-                esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
+                if (s_pairing || consume_pairing_flag()) {
+                    s_pairing       = true;
+                    s_pairing_start = xTaskGetTickCount();
+                    ESP_LOGI(TAG, "Pairing requested – start network steering");
+                    esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
+                } else {
+                    ESP_LOGI(TAG, "Factory-new device – idle until long-press pairing");
+                }
             } else {
                 ESP_LOGI(TAG, "Device rebooted – already commissioned");
                 s_connected = true;
@@ -158,12 +195,19 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                      esp_zb_get_pan_id(), esp_zb_get_current_channel(),
                      esp_zb_get_short_address());
             s_connected = true;
-            s_pairing   = false;    /* Pairing complete */
+            s_pairing   = false;
         } else {
-            ESP_LOGI(TAG, "Network steering failed (status: %s), retrying",
-                     esp_err_to_name(err_status));
-            esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb,
-                                   ESP_ZB_BDB_MODE_NETWORK_STEERING, 1000);
+            if (s_pairing &&
+                (xTaskGetTickCount() - s_pairing_start) < pdMS_TO_TICKS(PAIRING_TIMEOUT_MS)) {
+                ESP_LOGI(TAG, "Network steering failed (status: %s), retrying",
+                         esp_err_to_name(err_status));
+                esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb,
+                                       ESP_ZB_BDB_MODE_NETWORK_STEERING, 1000);
+            } else {
+                ESP_LOGW(TAG, "Network steering stopped – %s",
+                         s_pairing ? "timed out" : "no pairing requested");
+                s_pairing = false;
+            }
         }
         break;
 
@@ -435,15 +479,20 @@ bool zigbee_is_connected(void)
 
 void zigbee_start_pairing(void)
 {
-    ESP_LOGI(TAG, "Manual pairing requested – factory reset and network steering");
+    ESP_LOGI(TAG, "Manual pairing requested");
     s_pairing       = true;
     s_connected     = false;
     s_pairing_start = xTaskGetTickCount();
 
-    /* Wipe Zigbee credentials and restart in factory-new mode.
-       The signal handler will see factory_new == true and auto-start steering. */
     esp_zb_lock_acquire(portMAX_DELAY);
-    esp_zb_factory_reset();
+    if (esp_zb_bdb_is_factory_new()) {
+        ESP_LOGI(TAG, "Already factory-new – starting network steering directly");
+        esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
+    } else {
+        ESP_LOGI(TAG, "Clearing credentials – device will reboot");
+        set_pairing_flag();
+        esp_zb_factory_reset();
+    }
     esp_zb_lock_release();
 }
 
