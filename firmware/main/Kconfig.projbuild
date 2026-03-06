@@ -1,0 +1,11 @@
+menu "AirCube Configuration"
+
+config AIRCUBE_ZB_TX_POWER_DBM
+    int "Zigbee TX power (dBm)"
+    range -24 20
+    default 10
+    help
+        Requested Zigbee transmit power in dBm for the native 802.15.4 radio.
+        Actual applied power may be clamped by hardware, SDK, or regional limits.
+
+endmenu
