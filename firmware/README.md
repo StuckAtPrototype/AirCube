@@ -36,6 +36,25 @@ Below is short explanation of remaining files in the project folder.
 
 For more information on structure and contents of ESP-IDF projects, please refer to Section [Build System](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html) of the ESP-IDF Programming Guide.
 
+## AirCube Zigbee TX Power
+
+AirCube exposes a build-time Zigbee TX power setting:
+
+- `AirCube Configuration` -> `Zigbee TX power (dBm)` (`CONFIG_AIRCUBE_ZB_TX_POWER_DBM`)
+- Default: `10 dBm`
+- Supported menuconfig range: `-24` to `20 dBm`
+
+Set it with:
+
+```
+idf.py menuconfig
+```
+
+Then build and flash as usual. At boot, the firmware logs requested and applied TX power.
+
+Higher values can improve edge-link reliability, but actual power may be limited by hardware,
+SDK behavior, and regional regulatory limits.
+
 ## Troubleshooting
 
 * Program upload failure

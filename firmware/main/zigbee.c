@@ -374,6 +374,29 @@ static void configure_reporting(void)
     esp_zb_zcl_update_reporting_info(&aqi_rpt);
 }
 
+static void apply_zigbee_tx_power(void)
+{
+#if defined(CONFIG_AIRCUBE_ZB_TX_POWER_DBM)
+#if defined(ESP_ZB_VER_MAJOR) && defined(ESP_ZB_VER_MINOR) && \
+    ((ESP_ZB_VER_MAJOR > 1) || (ESP_ZB_VER_MAJOR == 1 && ESP_ZB_VER_MINOR >= 6))
+    const int8_t requested_dbm = (int8_t)CONFIG_AIRCUBE_ZB_TX_POWER_DBM;
+    int8_t applied_dbm = 0;
+
+    esp_zb_set_tx_power(requested_dbm);
+    esp_zb_get_tx_power(&applied_dbm);
+
+    if (applied_dbm != requested_dbm) {
+        ESP_LOGW(TAG, "Requested Zigbee TX power %d dBm, applied %d dBm",
+                 requested_dbm, applied_dbm);
+    } else {
+        ESP_LOGI(TAG, "Zigbee TX power set to %d dBm", applied_dbm);
+    }
+#else
+    ESP_LOGW(TAG, "Zigbee TX power config is not supported by this ESP Zigbee SDK");
+#endif
+#endif
+}
+
 /* ── Zigbee main task ────────────────────────────────────────────────── */
 
 static void esp_zb_task(void *pvParameters)
@@ -400,6 +423,9 @@ static void esp_zb_task(void *pvParameters)
 
     /* Use all channels for network steering */
     esp_zb_set_primary_network_channel_set(AIRCUBE_CHANNEL_MASK);
+
+    /* Apply configured Zigbee TX power before stack start */
+    apply_zigbee_tx_power();
 
     /* Start the Zigbee stack (false = not coordinator) */
     ESP_ERROR_CHECK(esp_zb_start(false));

@@ -33,7 +33,7 @@ const fzAirCubeAirQuality = {
     convert: (model, msg, publish, options, meta) => {
         const result = {};
         if (msg.data.hasOwnProperty(ATTR_ECO2)) {
-            result.co2 = msg.data[ATTR_ECO2];
+            result.eco2 = msg.data[ATTR_ECO2];
         }
         if (msg.data.hasOwnProperty(ATTR_ETVOC)) {
             result.voc = msg.data[ATTR_ETVOC];
@@ -57,9 +57,9 @@ const definition = {
     fromZigbee: [fzAirCubeAirQuality],
     toZigbee: [],
     exposes: [
-        e.numeric('co2', exposes.access.STATE)
+        e.numeric('eco2', exposes.access.STATE)
             .withUnit('ppm')
-            .withDescription('Carbon dioxide concentration')
+            .withDescription('Equivalent carbon dioxide concentration')
             .withValueMin(400)
             .withValueMax(8192),
         e.numeric('voc', exposes.access.STATE)
