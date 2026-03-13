@@ -1,13 +1,13 @@
 /**
- * Zigbee2MQTT External Converter for AirCube (Z2M 1.x)
+ * Zigbee2MQTT External Converter for AirCube (Z2M 2.x)
  *
- * This file uses CommonJS format for Z2M 1.x. For Z2M 2.x, use aircube.mjs instead.
+ * Z2M 2.x requires ES module format (.mjs). For Z2M 1.x, use aircube.js instead.
  *
- * Place this file in your Zigbee2MQTT data directory and reference it
- * in configuration.yaml:
+ * Place this file in your Zigbee2MQTT external_converters directory and
+ * reference it in configuration.yaml:
  *
  *   external_converters:
- *     - aircube.js
+ *     - external_converters/aircube.mjs
  *
  * Standard clusters (auto-handled by Z2M):
  *   - Temperature Measurement (0x0402)
@@ -19,12 +19,14 @@
  *   0x0002 = AQI   (uint16, index)
  */
 
-const {temperature, humidity} = require('zigbee-herdsman-converters/lib/modernExtend');
-const fz = require('zigbee-herdsman-converters/converters/fromZigbee');
-const exposes = require('zigbee-herdsman-converters/lib/exposes');
+import {temperature, humidity} from 'zigbee-herdsman-converters/lib/modernExtend';
+import * as exposes from 'zigbee-herdsman-converters/lib/exposes';
+
 const e = exposes.presets;
 
-const CUSTOM_CLUSTER_ID = 0xFC01;
+// Z2M 2.x requires the cluster ID as a string for custom (non-standard) clusters.
+const CUSTOM_CLUSTER_ID = '64513'; // 0xFC01
+
 const ATTR_ECO2  = 0x0000;
 const ATTR_ETVOC = 0x0001;
 const ATTR_AQI   = 0x0002;
@@ -92,4 +94,4 @@ const definition = {
     },
 };
 
-module.exports = definition;
+export default definition;

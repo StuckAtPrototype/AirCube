@@ -187,70 +187,38 @@ Use this method if you prefer Zigbee2MQTT or already have it running.
 
 ## B5 -- Add the AirCube Converter
 
+The converter file format depends on your Zigbee2MQTT version:
+- **Z2M 2.x** (2024+): Uses ES modules (`.mjs`)
+- **Z2M 1.x** (legacy): Uses CommonJS (`.js`)
+
+Both converter files are in the [`z2m/`](z2m/) folder of this repo.
+
+### Z2M 2.x (Recommended)
+
 1. Open **File editor** (install from Add-on Store if needed).
-2. Navigate to the `zigbee2mqtt` folder.
-3. Create a new file called **`aircube.js`** and paste:
-
-```javascript
-const {temperature, humidity} = require('zigbee-herdsman-converters/lib/modernExtend');
-const exposes = require('zigbee-herdsman-converters/lib/exposes');
-const e = exposes.presets;
-
-const definition = {
-    zigbeeModel: ['AirCube'],
-    model: 'AirCube',
-    vendor: 'StuckAtPrototype',
-    description: 'AirCube air quality monitor',
-    extend: [temperature(), humidity()],
-    fromZigbee: [{
-        cluster: 0xFC01,
-        type: ['attributeReport', 'readResponse'],
-        convert: (model, msg, publish, options, meta) => {
-            const result = {};
-            if (msg.data.hasOwnProperty(0x0000)) result.co2 = msg.data[0x0000];
-            if (msg.data.hasOwnProperty(0x0001)) result.voc = msg.data[0x0001];
-            if (msg.data.hasOwnProperty(0x0002)) result.aqi = msg.data[0x0002];
-            return result;
-        },
-    }],
-    toZigbee: [],
-    exposes: [
-        e.numeric('co2', exposes.access.STATE).withUnit('ppm')
-            .withDescription('Carbon dioxide concentration')
-            .withValueMin(400).withValueMax(8192),
-        e.numeric('voc', exposes.access.STATE).withUnit('ppb')
-            .withDescription('Total volatile organic compounds')
-            .withValueMin(0).withValueMax(65535),
-        e.numeric('aqi', exposes.access.STATE)
-            .withDescription('Air Quality Index')
-            .withValueMin(0).withValueMax(500),
-    ],
-    configure: async (device, coordinatorEndpoint) => {
-        const endpoint = device.getEndpoint(10);
-        await endpoint.bind('msTemperatureMeasurement', coordinatorEndpoint);
-        await endpoint.bind('msRelativeHumidity', coordinatorEndpoint);
-        await endpoint.configureReporting('msTemperatureMeasurement', [{
-            attribute: 'measuredValue', minimumReportInterval: 1,
-            maximumReportInterval: 60, reportableChange: 50,
-        }]);
-        await endpoint.configureReporting('msRelativeHumidity', [{
-            attribute: 'measuredValue', minimumReportInterval: 1,
-            maximumReportInterval: 60, reportableChange: 100,
-        }]);
-    },
-};
-
-module.exports = definition;
-```
-
+2. Navigate to the `zigbee2mqtt` folder and create an `external_converters` subfolder.
+3. Copy [`z2m/aircube.mjs`](z2m/aircube.mjs) into the `external_converters` folder.
 4. Open **`configuration.yaml`** in the `zigbee2mqtt` folder and add:
+
+   ```yaml
+   external_converters:
+     - external_converters/aircube.mjs
+   ```
+
+5. **Restart Zigbee2MQTT** from the add-on page.
+
+### Z2M 1.x (Legacy)
+
+1. Open **File editor**.
+2. Copy [`z2m/aircube.js`](z2m/aircube.js) into the `zigbee2mqtt` folder.
+3. Open **`configuration.yaml`** in the `zigbee2mqtt` folder and add:
 
    ```yaml
    external_converters:
      - aircube.js
    ```
 
-5. **Restart Zigbee2MQTT** from the add-on page.
+4. **Restart Zigbee2MQTT** from the add-on page.
 
 ## B6 -- Pair the AirCube
 
@@ -341,7 +309,8 @@ entities:
 - The custom quirk (ZHA) or converter (Z2M) is not loaded.
 - **ZHA:** Check that `custom_quirks_path` is set in `configuration.yaml` and the `aircube.py` file is in the right folder. Restart Home Assistant, then remove and re-pair the AirCube.
 - **Firmware:** Make sure you are running the latest AirCube firmware from this repo. It actively sends attribute reports for the custom cluster so ZHA updates the sensors.
-- **Z2M:** Check that `external_converters` is in the Z2M `configuration.yaml` and `aircube.js` is in the `zigbee2mqtt` folder. Restart Zigbee2MQTT.
+- **Z2M 2.x:** Make sure you're using `aircube.mjs` (not `aircube.js`). Z2M 2.x requires ES module format. If Z2M renames the file to `aircube.mjs.invalid`, the converter has a load error — check the Z2M logs.
+- **Z2M 1.x:** Check that `external_converters` is in the Z2M `configuration.yaml` and `aircube.js` is in the `zigbee2mqtt` folder. Restart Zigbee2MQTT.
 
 ### CO2 / VOC / AQI values are stuck at 0
 
