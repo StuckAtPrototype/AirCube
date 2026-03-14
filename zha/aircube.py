@@ -29,6 +29,7 @@ class AirQualityCluster(CustomCluster):
         AirQualityCluster.cluster_id,
         endpoint_id=10,
         unit="ppm",
+        device_class=SensorDeviceClass.CO2,
         state_class=SensorStateClass.MEASUREMENT,
         fallback_name="eCO2",
     )
