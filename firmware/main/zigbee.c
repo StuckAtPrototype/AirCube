@@ -19,7 +19,9 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <string.h>
 #include "esp_check.h"
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -45,12 +47,14 @@ static const char *TAG = "zigbee";
 /* ZCL string attributes: first byte is the string length */
 #define MANUFACTURER_NAME           "\x10" "StuckAtPrototype"
 #define MODEL_IDENTIFIER            "\x07" "AirCube"
+#define SW_BUILD_ID_MAX_LEN         (sizeof(((esp_app_desc_t *)0)->version) - 1)
 
 /* ── State ───────────────────────────────────────────────────────────── */
 
 static volatile bool s_connected = false;
 static volatile bool s_pairing   = false;
 static TickType_t    s_pairing_start = 0;
+static uint8_t       s_sw_build_id[SW_BUILD_ID_MAX_LEN + 1] = { 0 };
 
 #define PAIRING_TIMEOUT_MS  60000   /* Auto-cancel pairing after 60 s */
 
@@ -66,6 +70,16 @@ static int16_t temp_to_zb(float temp_c)
 static uint16_t humidity_to_zb(float rh)
 {
     return (uint16_t)(rh * 100.0f);
+}
+
+/** Build a Zigbee Pascal string from the ESP-IDF app version. */
+static void init_sw_build_id(void)
+{
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    size_t version_len = strnlen(app_desc->version, SW_BUILD_ID_MAX_LEN);
+
+    s_sw_build_id[0] = (uint8_t)version_len;
+    memcpy(&s_sw_build_id[1], app_desc->version, version_len);
 }
 
 static void report_custom_attr(uint16_t attr_id)
@@ -225,12 +239,15 @@ static esp_zb_cluster_list_t *create_cluster_list(void)
 {
     esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
 
-    /* ---- Basic cluster (mandatory, carries device identity) ---- */
+    /* ---- Basic cluster (mandatory, carries device identity and firmware version) ---- */
+    init_sw_build_id();
     esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(NULL);
     ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster,
         ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, (void *)MANUFACTURER_NAME));
     ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster,
         ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, (void *)MODEL_IDENTIFIER));
+    ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster,
+        ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID, s_sw_build_id));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_basic_cluster(cluster_list,
         basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 
