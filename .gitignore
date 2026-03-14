@@ -10,6 +10,9 @@ venv/
 hardware/racer/fp-info-cache
 hardware/racer/racer-backups
 *.csv
+!firmware/partitions_zigbee.csv
+!kicad/*.csv
+!scripts/sensor_log.csv
 
 # Python
 __pycache__/
