@@ -237,8 +237,13 @@ void sensor_task(void *pvParameters)
         history_record_sample(temp_c, humidity, aqi, eco2, etvoc);
         history_check_flush();
         
-        // Push sensor data to Zigbee attributes (reports automatically)
-        zigbee_update_sensors(temp_c, humidity, eco2, etvoc, aqi);
+        // Push sensor data to Zigbee attributes every 10 seconds
+        static TickType_t last_zb_update = 0;
+        TickType_t now = xTaskGetTickCount();
+        if ((now - last_zb_update) >= pdMS_TO_TICKS(10000)) {
+            last_zb_update = now;
+            zigbee_update_sensors(temp_c, humidity, eco2, etvoc, aqi);
+        }
         
         // Wait for configurable period before next reading
         uint32_t period = get_sensor_readout_period_ms();
