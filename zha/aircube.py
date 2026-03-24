@@ -2,24 +2,36 @@
 
 from zigpy.quirks import CustomCluster
 from zigpy.quirks.v2 import QuirkBuilder
+from zigpy.quirks.v2.homeassistant import EntityType
 from zigpy.zcl.foundation import ZCLAttributeDef
 import zigpy.types as t
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+try:
+    from zigpy.quirks.v2.homeassistant.sensor import SensorDeviceClass, SensorStateClass
+except ImportError:
+    from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 
 
 class AirQualityCluster(CustomCluster):
-    """AirCube custom air quality cluster (0xFC01)."""
+    """AirCube custom air quality cluster (0xFC01) — read-only sensors."""
 
     cluster_id = 0xFC01
     name = "AirCube Air Quality"
     ep_attribute = "aircube_air_quality"
 
     class AttributeDefs(CustomCluster.AttributeDefs):
-        eco2 = ZCLAttributeDef(id=0x0000, type=t.uint16_t, is_manufacturer_specific=True)
-        etvoc = ZCLAttributeDef(id=0x0001, type=t.uint16_t, is_manufacturer_specific=True)
-        aqi = ZCLAttributeDef(id=0x0002, type=t.uint16_t, is_manufacturer_specific=True)
+        eco2 = ZCLAttributeDef(
+            id=0x0000, type=t.uint16_t, is_manufacturer_specific=False
+        )
+        etvoc = ZCLAttributeDef(
+            id=0x0001, type=t.uint16_t, is_manufacturer_specific=False
+        )
+        aqi = ZCLAttributeDef(
+            id=0x0002, type=t.uint16_t, is_manufacturer_specific=False
+        )
 
+
+ANALOG_OUTPUT_CLUSTER_ID = 0x000D
 
 (
     QuirkBuilder("StuckAtPrototype", "AirCube")
@@ -29,8 +41,9 @@ class AirQualityCluster(CustomCluster):
         AirQualityCluster.cluster_id,
         endpoint_id=10,
         unit="ppm",
+        device_class=SensorDeviceClass.CO2,
         state_class=SensorStateClass.MEASUREMENT,
-        fallback_name="eCO2",
+        fallback_name="Equivalent CO2",
     )
     .sensor(
         AirQualityCluster.AttributeDefs.etvoc.name,
@@ -39,7 +52,7 @@ class AirQualityCluster(CustomCluster):
         unit="ppb",
         device_class=SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS,
         state_class=SensorStateClass.MEASUREMENT,
-        fallback_name="eTVOC",
+        fallback_name="Volatile organic compounds",
     )
     .sensor(
         AirQualityCluster.AttributeDefs.aqi.name,
@@ -47,7 +60,19 @@ class AirQualityCluster(CustomCluster):
         endpoint_id=10,
         device_class=SensorDeviceClass.AQI,
         state_class=SensorStateClass.MEASUREMENT,
-        fallback_name="AQI",
+        fallback_name="Air quality index",
+    )
+    .number(
+        "present_value",
+        ANALOG_OUTPUT_CLUSTER_ID,
+        endpoint_id=10,
+        min_value=0,
+        max_value=100,
+        step=1,
+        mode="slider",
+        entity_type=EntityType.STANDARD,
+        translation_key="brightness",
+        fallback_name="Brightness",
     )
     .add_to_registry()
 )
