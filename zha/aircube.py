@@ -41,7 +41,7 @@ ANALOG_OUTPUT_CLUSTER_ID = 0x000D
         AirQualityCluster.cluster_id,
         endpoint_id=10,
         unit="ppm",
-        device_class=SensorDeviceClass.CO2,
+        translation_key="equivalent_co2",
         state_class=SensorStateClass.MEASUREMENT,
         fallback_name="Equivalent CO2",
     )
