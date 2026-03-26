@@ -34,7 +34,7 @@ AirCube/
 │       ├── button.c/h            # Button debounce & brightness cycling
 │       ├── serial_protocol.c/h   # JSON serial command interface (USB)
 │       ├── history.c/h           # 7-day sensor history ring buffer on flash
-│       ├── zigbee.c/h            # Zigbee End Device (ZCL + custom cluster)
+│       ├── zigbee.c/h            # Zigbee End Device (ZCL + custom cluster + brightness)
 │       └── environmental.c/h     # (placeholder / future use)
 │
 ├── scripts/               # Python desktop tools
@@ -126,9 +126,11 @@ app_main()
 ```
 ENS210 (I2C)  ──► sensor_task ──► serial JSON output (USB)
 ENS16X (I2C)  ──►      │       ├─► history_record_sample() ──► flash ring buffer
-                        │       └─► zigbee_update_sensors()  ──► Zigbee attribute reports
+                        │       └─► zigbee_update_sensors()  ──► Zigbee attribute reports (every 10s)
                         │
                    AQI value ──► main loop ──► LED color (green-to-red hue mapping)
+                                                    ▲
+              Home Assistant ──► Zigbee Analog Output write ──► led_set_intensity() (brightness)
 ```
 
 ### Module overview
@@ -147,7 +149,7 @@ ENS16X (I2C)  ──►      │       ├─► history_record_sample() ──�
 **Communication**
 
 - `serial_protocol.c` -- JSON-over-USB serial interface. Sends periodic sensor data, accepts commands (see Serial Protocol below).
-- `zigbee.c` -- Registers a Zigbee End Device on the ESP32-H2's native 802.15.4 radio. Exposes temperature/humidity via standard ZCL clusters and eCO2/eTVOC/AQI via custom cluster 0xFC01.
+- `zigbee.c` -- Registers a Zigbee End Device on the ESP32-H2's native 802.15.4 radio. Exposes temperature/humidity via standard ZCL clusters, eCO2/eTVOC/AQI via custom cluster 0xFC01, and LED brightness via the standard Analog Output cluster (0x000D).
 
 **Storage**
 
@@ -223,7 +225,8 @@ The ESP32-H2 has a native IEEE 802.15.4 radio. AirCube registers as a Zigbee End
 |---------|----|-----------|
 | Temperature Measurement | 0x0402 | `measuredValue` (int16, x100 C) |
 | Relative Humidity | 0x0405 | `measuredValue` (uint16, x100 %) |
-| Custom Air Quality | 0xFC01 | `eco2` (0x0000), `etvoc` (0x0001), `aqi` (0x0002) -- all uint16 |
+| Custom Air Quality | 0xFC01 | `eco2` (0x0000), `etvoc` (0x0001), `aqi` (0x0002) -- all uint16, read-only |
+| Analog Output | 0x000D | `presentValue` (float, 0--100) -- LED brightness, writable |
 
 The custom cluster requires a **ZHA quirk** or **Zigbee2MQTT external converter** on the Home Assistant side. Both are included in the repo (`zha/aircube.py` and `z2m/aircube.js`).
 
