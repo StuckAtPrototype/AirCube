@@ -1,6 +1,6 @@
 # AirCube
 
-**Know your air.** AirCube is a desktop air quality monitor with built-in **Home Assistant** support. It tracks temperature, humidity, eCO2, eTVOC, and AQI -- showing air quality as a single, glanceable LED color and reporting every reading to your smart home over **Zigbee**.
+**Know your air.** AirCube is a desktop air quality monitor with built-in **Home Assistant** support. It tracks temperature, humidity, eCO2, TVOC, and AQI -- showing air quality as a single, glanceable LED color and reporting every reading to your smart home over **Zigbee**.
 
 Works standalone out of the box. Pairs with Home Assistant in minutes.
 
@@ -52,7 +52,6 @@ AirCube was designed for Home Assistant. It connects over **Zigbee** -- no USB c
 Once connected you can:
 - **Track air quality over time** with built-in history graphs
 - **Set up automations** -- turn on a fan when eCO2 gets too high, send a notification when AQI spikes
-- **Control LED brightness** from your Home Assistant dashboard (0--100% slider)
 - **Monitor every room** -- each AirCube pairs independently, name them however you like
 
 **You'll need:** a Zigbee coordinator dongle (we recommend the [SONOFF ZBDongle-E](https://sonoff.tech/product/gateway-and-sensors/sonoff-zigbee-3-0-usb-dongle-plus-e/), ~$13) plugged into your Home Assistant machine.
@@ -127,7 +126,8 @@ Latest release: [GitHub Releases](https://github.com/StuckAtPrototype/AirCube/re
 - Windows users may need to install [USB drivers](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers).
 - Linux users: add yourself to the `dialout` group and re-login.
 
-**Home Assistant: eCO2, eTVOC, or AQI sensors are missing**
+
+**Home Assistant: eCO2, TVOC, or AQI sensors are missing**
 - The custom quirk or converter isn't loaded yet. See the [Home Assistant guide](HOME_ASSISTANT.md) for step-by-step instructions.
 
 **Home Assistant: AirCube won't pair**
