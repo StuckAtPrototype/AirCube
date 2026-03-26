@@ -135,9 +135,11 @@ ANALOG_OUTPUT_CLUSTER_ID = 0x000D
 
    ```yaml
    zha:
-     custom_quirks_path: /config/custom_zha_quirks
+     custom_quirks_path: /config/custom_zha_quirks/
      enable_quirks: true
    ```
+
+   > **Important:** The trailing `/` on the path is required in Home Assistant 2026.x and works fine on older versions too.
 
    If you already have a `zha:` section, just add the two lines underneath it.
 
