@@ -86,7 +86,7 @@ const definition = {
     exposes: [
         e.numeric('eco2', exposes.access.STATE)
             .withUnit('ppm')
-            .withDescription('Equivalent carbon dioxide concentration')
+            .withDescription('Equivalent CO2 concentration')
             .withValueMin(400)
             .withValueMax(8192),
         e.numeric('voc', exposes.access.STATE)
