@@ -36,7 +36,7 @@ That's it. AirCube works out of the box with no setup, no accounts, and no Wi-Fi
 | Measurement | What It Tells You |
 |-------------|------------------|
 | **AQI** (Air Quality Index) | Overall air quality score, reflected by the LED color |
-| **eCO2** | Estimated CO2 in ppm -- rises in stuffy or crowded rooms |
+| **eCO2** | Equivalent CO2 in ppm -- rises in stuffy or crowded rooms |
 | **eTVOC** | Volatile organic compounds in ppb -- cleaning products, paint, off-gassing |
 | **Temperature** | Room temperature in Celsius |
 | **Humidity** | Relative humidity percentage |
@@ -125,6 +125,7 @@ Latest release: [GitHub Releases](https://github.com/StuckAtPrototype/AirCube/re
 - Some USB cables are charge-only. Use a cable that supports data.
 - Windows users may need to install [USB drivers](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers).
 - Linux users: add yourself to the `dialout` group and re-login.
+
 
 **Home Assistant: eCO2, TVOC, or AQI sensors are missing**
 - The custom quirk or converter isn't loaded yet. See the [Home Assistant guide](HOME_ASSISTANT.md) for step-by-step instructions.
