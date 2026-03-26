@@ -10,12 +10,14 @@
  *   - Identify (0x0003)          : Standard identify
  *   - Temperature Meas (0x0402)  : Actual temperature in 0.01 C
  *   - Humidity Meas (0x0405)     : Actual humidity in 0.01 %
- *   - Custom (0xFC01)            : eCO2, eTVOC, AQI (for Z2M)
+ *   - Custom (0xFC01)            : eCO2, eTVOC, AQI
+ *   - Analog Output (0x000D)     : LED brightness (0-100)
  *
  * @author StuckAtPrototype, LLC
  */
 
 #include "zigbee.h"
+#include "led.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -35,9 +37,12 @@ static const char *TAG = "zigbee";
 
 /* Custom cluster for air quality metrics (manufacturer-specific range) */
 #define CUSTOM_CLUSTER_ID           0xFC01
-#define ATTR_ECO2_ID                0x0000   /* uint16 – ppm  */
-#define ATTR_ETVOC_ID               0x0001   /* uint16 – ppb  */
+#define ATTR_ECO2_ID                0x0000   /* uint16 – ppm   */
+#define ATTR_ETVOC_ID               0x0001   /* uint16 – ppb   */
 #define ATTR_AQI_ID                 0x0002   /* uint16 – index */
+
+/* Analog Output cluster (0x000D) for brightness – standard cluster so
+   ZCL Write Attributes from coordinators is handled natively by ZBOSS. */
 
 /* Zigbee channel mask – scan all channels */
 #define AIRCUBE_CHANNEL_MASK        ESP_ZB_TRANSCEIVER_ALL_CHANNELS_MASK
@@ -68,14 +73,14 @@ static uint16_t humidity_to_zb(float rh)
     return (uint16_t)(rh * 100.0f);
 }
 
-static void report_custom_attr(uint16_t attr_id)
+static void report_attr(uint16_t cluster_id, uint16_t attr_id)
 {
     esp_zb_zcl_report_attr_cmd_t report_cmd = { 0 };
-    report_cmd.zcl_basic_cmd.dst_addr_u.addr_short = 0x0000; /* Coordinator */
+    report_cmd.zcl_basic_cmd.dst_addr_u.addr_short = 0x0000;
     report_cmd.zcl_basic_cmd.dst_endpoint = 1;
     report_cmd.zcl_basic_cmd.src_endpoint = AIRCUBE_ENDPOINT;
     report_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-    report_cmd.clusterID = CUSTOM_CLUSTER_ID;
+    report_cmd.clusterID = cluster_id;
     report_cmd.manuf_specific = 0;
     report_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
     report_cmd.dis_default_resp = 1;
@@ -281,6 +286,17 @@ static esp_zb_cluster_list_t *create_cluster_list(void)
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cluster_list,
         custom_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 
+    /* ---- Analog Output cluster 0x000D (brightness, writable) ---- */
+    esp_zb_analog_output_cluster_cfg_t ao_cfg = {
+        .out_of_service = false,
+        .present_value  = 60.0f,
+        .status_flags   = 0,
+    };
+    esp_zb_attribute_list_t *ao_cluster =
+        esp_zb_analog_output_cluster_create(&ao_cfg);
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_analog_output_cluster(cluster_list,
+        ao_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+
     return cluster_list;
 }
 
@@ -372,6 +388,7 @@ static void configure_reporting(void)
         .manuf_code         = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
     };
     esp_zb_zcl_update_reporting_info(&aqi_rpt);
+
 }
 
 static void apply_zigbee_tx_power(void)
@@ -395,6 +412,29 @@ static void apply_zigbee_tx_power(void)
     ESP_LOGW(TAG, "Zigbee TX power config is not supported by this ESP Zigbee SDK");
 #endif
 #endif
+}
+
+/* ── Action handler (brightness writes via Analog Output cluster) ─────── */
+
+static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
+                                   const void *message)
+{
+    if (callback_id == ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID && message) {
+        const esp_zb_zcl_set_attr_value_message_t *m =
+            (const esp_zb_zcl_set_attr_value_message_t *)message;
+
+        if (m->info.dst_endpoint == AIRCUBE_ENDPOINT &&
+            m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT &&
+            m->attribute.id == ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID)
+        {
+            float raw = *(float *)m->attribute.data.value;
+            if (raw < 0.0f)   raw = 0.0f;
+            if (raw > 100.0f) raw = 100.0f;
+            led_set_intensity(raw / 100.0f);
+            ESP_LOGI(TAG, "Brightness set to %.0f%% via Zigbee", raw);
+        }
+    }
+    return ESP_OK;
 }
 
 /* ── Zigbee main task ────────────────────────────────────────────────── */
@@ -426,6 +466,9 @@ static void esp_zb_task(void *pvParameters)
 
     /* Apply configured Zigbee TX power before stack start */
     apply_zigbee_tx_power();
+
+    /* Handle attribute writes from coordinator (brightness via Analog Output) */
+    esp_zb_core_action_handler_register(zb_action_handler);
 
     /* Start the Zigbee stack (false = not coordinator) */
     ESP_ERROR_CHECK(esp_zb_start(false));
@@ -490,10 +533,20 @@ void zigbee_update_sensors(float temp_c, float humidity, int eco2, int etvoc, in
         CUSTOM_CLUSTER_ID, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
         ATTR_AQI_ID, &zb_aqi, false);
 
-    /* One-shot attribute reports to ensure ZHA updates */
-    report_custom_attr(ATTR_ECO2_ID);
-    report_custom_attr(ATTR_ETVOC_ID);
-    report_custom_attr(ATTR_AQI_ID);
+    /* Sync current brightness to Analog Output cluster (covers button changes) */
+    float zb_brightness = led_get_intensity() * 100.0f;
+    esp_zb_zcl_set_attribute_val(AIRCUBE_ENDPOINT,
+        ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID, &zb_brightness, false);
+
+    /* One-shot attribute reports to ensure coordinator updates */
+    report_attr(ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
+                ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID);
+    report_attr(ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
+                ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID);
+    report_attr(CUSTOM_CLUSTER_ID, ATTR_ECO2_ID);
+    report_attr(CUSTOM_CLUSTER_ID, ATTR_ETVOC_ID);
+    report_attr(CUSTOM_CLUSTER_ID, ATTR_AQI_ID);
 
     esp_zb_lock_release();
 }
