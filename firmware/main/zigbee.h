@@ -3,8 +3,9 @@
  * @brief Zigbee integration for AirCube
  *
  * Exposes temperature, humidity, eCO2, eTVOC, and AQI over Zigbee
- * using standard ZCL clusters (temp/humidity) and a manufacturer-specific
- * custom cluster (0xFC01) for air quality metrics.
+ * using standard ZCL clusters (temp/humidity), a manufacturer-specific
+ * custom cluster (0xFC01) for air quality metrics, and the standard
+ * Analog Output cluster (0x000D) for LED brightness control.
  *
  * @author StuckAtPrototype, LLC
  */
@@ -26,6 +27,7 @@ extern "C" {
  *   - Temperature Measurement cluster (0x0402)
  *   - Relative Humidity cluster (0x0405)
  *   - Custom cluster (0xFC01) for eCO2, eTVOC, AQI
+ *   - Analog Output cluster (0x000D) for LED brightness
  *
  * On first boot (factory-new), the stack stays idle until the user
  * triggers pairing via a long button press.  On subsequent boots the
