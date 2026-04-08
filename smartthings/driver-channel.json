@@ -1,0 +1,6 @@
+{
+  "name": "AirCube private driver channel",
+  "description": "Channel for StuckAtPrototype AirCube Edge driver (personal / beta testing)",
+  "termsOfServiceUrl": "https://stuckatprototype.com/policies/terms-of-service",
+  "type": "DRIVER"
+}
