@@ -1,0 +1,6 @@
+{
+  "name": "AirCube private driver channel",
+  "description": "Channel for StuckAtPrototype AirCube Edge driver (personal / beta testing)",
+  "termsOfServiceUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+  "type": "DRIVER"
+}

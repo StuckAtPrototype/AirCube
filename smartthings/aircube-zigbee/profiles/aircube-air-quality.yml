@@ -1,0 +1,20 @@
+name: aircube-air-quality
+components:
+  - id: main
+    capabilities:
+      - id: temperatureMeasurement
+        version: 1
+      - id: relativeHumidityMeasurement
+        version: 1
+      - id: carbonDioxideMeasurement
+        version: 1
+      - id: tvocMeasurement
+        version: 1
+      - id: airQualitySensor
+        version: 1
+      - id: firmwareUpdate
+        version: 1
+      - id: refresh
+        version: 1
+    categories:
+      - name: AirQualityDetector

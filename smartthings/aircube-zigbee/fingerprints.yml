@@ -1,0 +1,6 @@
+zigbeeManufacturer:
+  - id: StuckAtPrototype/AirCube
+    deviceLabel: AirCube
+    manufacturer: StuckAtPrototype
+    model: AirCube
+    deviceProfileName: aircube-air-quality
