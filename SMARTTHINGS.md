@@ -92,30 +92,19 @@ smartthings edge:drivers:package . -b ./aircube-zigbee.zip
 
 You need a **driver channel** to install your own driver on the hub.
 
-1. Create a JSON file (example below) — e.g. `channel.json` in any folder.
+This repo ships [`smartthings/driver-channel.json`](smartthings/driver-channel.json) for `edge:channels:create`. It points **`termsOfServiceUrl`** at the StuckAtPrototype **[Terms of Service](https://stuckatprototype.com/policies/terms-of-service)**. Edit **`name`** / **`description`** in that file if you want different labels on your channel.
 
-```json
-{
-  "name": "My AirCube test channel",
-  "description": "Private channel for AirCube Edge driver",
-  "termsOfServiceUrl": "https://example.com",
-  "type": "DRIVER"
-}
-```
-
-2. Run:
+From the **repository root** (the folder that contains `smartthings/`):
 
 ```bash
-smartthings edge:channels:create -i channel.json
+smartthings edge:channels:create -i smartthings/driver-channel.json
 ```
 
-3. List channels and copy your **channel id** (UUID):
+List channels and copy your **channel id** (UUID):
 
 ```bash
 smartthings edge:channels
 ```
-
-An example template is also in [`smartthings/channel-driver-example.json`](smartthings/channel-driver-example.json).
 
 ---
 

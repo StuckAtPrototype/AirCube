@@ -9,7 +9,7 @@ This folder contains the **AirCube Zigbee** Edge driver source for Samsung Smart
 ```text
 smartthings/
 ├── README.md                 # This file
-├── channel-driver-example.json   # Template for edge:channels:create
+├── driver-channel.json       # Input for `edge:channels:create -i` (TOS URL preset)
 └── aircube-zigbee/           # Driver package (config, fingerprints, profile, Lua)
     ├── config.yml
     ├── fingerprints.yml
