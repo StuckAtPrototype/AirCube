@@ -1,0 +1,11 @@
+title: Air Quality
+resources:
+  - url: /local/aircube-dashboard-card.js?v=5
+    type: module
+views:
+  - title: Air Quality
+    path: air-quality
+    icon: mdi:air-filter
+    cards:
+      - type: custom:aircube-dashboard-card
+

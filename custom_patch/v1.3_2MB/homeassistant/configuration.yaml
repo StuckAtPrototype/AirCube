@@ -1,0 +1,15 @@
+# ...
+
+zha:
+  custom_quirks_path: /config/custom_zha_quirks
+  enable_quirks: true
+
+# Lovelace dashboard configuration
+lovelace:
+  dashboards:
+    air-cube:
+      mode: yaml
+      filename: lovelace/aircube.yaml
+      title: Air Quality
+      icon: mdi:air-filter
+      show_in_sidebar: true
