@@ -1,0 +1,6 @@
+name: 'AirCube Zigbee'
+packageKey: 'aircube-zigbee'
+permissions:
+  zigbee: {}
+description: 'StuckAtPrototype AirCube air quality monitor (temperature, humidity, eCO2, eTVOC, AQI)'
+vendorSupportInformation: 'https://github.com/StuckAtPrototype/AirCube'
