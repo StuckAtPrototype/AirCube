@@ -1,8 +1,8 @@
 # AirCube
 
-**Know your air.** AirCube is a desktop air quality monitor with **official** built-in **Home Assistant** support over **Zigbee**. It tracks temperature, humidity, eCO2, TVOC, and AQI -- showing air quality as a single, glanceable LED color and reporting every reading to your smart home.
+**Know your air.** AirCube is a desktop air quality monitor with built-in **Home Assistant** support over **Zigbee**. It tracks temperature, humidity, eCO2, TVOC, and AQI -- showing air quality as a single, glanceable LED color and reporting every reading to your smart home.
 
-Works standalone out of the box. **Official** smart-home path: **Home Assistant** (pair in minutes). Other platforms are covered only under **Community extensions** below; they are not maintained or endorsed by StuckAtPrototype the same way.
+Works standalone out of the box. Pairs with Home Assistant in minutes. Other platforms are supported through **[community-contributed extensions](#community-extensions)**.
 
 [Watch the demo](https://youtu.be/m12KpLyLCrw) (early build -- Home Assistant integration came after this video)
 
@@ -45,11 +45,11 @@ The LED color is based on the AQI value. To see the individual numbers, connect 
 
 ---
 
-## Official vs. community
+## Built-in vs. community
 
-**Official (StuckAtPrototype):** firmware, hardware, desktop app, and the **Home Assistant** Zigbee integration documented in **[HOME_ASSISTANT.md](HOME_ASSISTANT.md)**.
+**Maintained by StuckAtPrototype:** firmware, hardware, desktop app, and the **Home Assistant** integration documented in **[HOME_ASSISTANT.md](HOME_ASSISTANT.md)**.
 
-**Community extensions:** integrations built and supported by the community, **not** first-party StuckAtPrototype products. They may require extra setup and can break if a vendor changes their platform. See **[Community extensions](#community-extensions)**.
+**Community-contributed:** integrations built and shared by the community. They live in this repo and are welcome, but StuckAtPrototype does not test or ship them. They may require extra setup and can break when a vendor updates their platform. See **[Community extensions](#community-extensions)**.
 
 ---
 
@@ -72,9 +72,9 @@ Once connected you can:
 
 ## Community extensions
 
-The following are **community-maintained** integrations. They are **not official** StuckAtPrototype or Samsung products; StuckAtPrototype does not guarantee compatibility with Samsung hub or app updates.
+The integrations below are **community-contributed**. They are not maintained by StuckAtPrototype and compatibility with vendor hub or app updates is not guaranteed.
 
-### SmartThings (Samsung Zigbee hub) — **not official**
+### SmartThings (Samsung Zigbee hub) — community-contributed
 
 Some users run AirCube on a **Samsung SmartThings** Zigbee hub over **Zigbee** (no Wi-Fi configuration on the device). The hub must support **SmartThings Edge**.
 
@@ -163,7 +163,7 @@ Latest release: [GitHub Releases](https://github.com/StuckAtPrototype/AirCube/re
 
 ## Open Source
 
-AirCube is fully open source -- firmware, PCB design, enclosure, desktop software, and **official** Home Assistant integration. **Community** hub integrations (see **[Community extensions](#community-extensions)**) also live in this repository. Everything is under the Apache 2.0 license.
+AirCube is fully open source -- firmware, PCB design, enclosure, desktop software, and Home Assistant integration. Community-contributed integrations (see **[Community extensions](#community-extensions)**) also live in this repository. Everything is under the Apache 2.0 license.
 
 **Developers and makers:** See the **[Contributing Guide](CONTRIBUTING.md)** for build instructions, architecture docs, serial protocol reference, and how to submit changes.
 
@@ -172,6 +172,6 @@ AirCube is fully open source -- firmware, PCB design, enclosure, desktop softwar
 | [Contributing Guide](CONTRIBUTING.md) | Build from source, firmware architecture, serial protocol, how to contribute |
 | [Firmware Update Guide](FIRMWARE_UPDATE.md) | Update your AirCube firmware from a browser |
 | [Home Assistant Guide](HOME_ASSISTANT.md) | ZHA and Zigbee2MQTT setup |
-| [Samsung hub integration](SMARTTHINGS.md) | Community: Edge driver, CLI setup (**not official**; see **Community extensions**) |
+| [Samsung hub integration](SMARTTHINGS.md) | Community-contributed: Edge driver, CLI setup (see **[Community extensions](#community-extensions)**) |
 | [GitHub Issues](https://github.com/StuckAtPrototype/AirCube/issues) | Bug reports and feature requests |
 | [License](LICENSE) | Apache 2.0 |
