@@ -46,7 +46,9 @@ The AirCube uses a custom Zigbee cluster (0xFC01) for air quality data and a sta
 
 2. Open **File editor** from the sidebar.
 
-3. Create a folder called **`custom_zha_quirks`** in your `/config/` directory (the same folder that contains your `configuration.yaml`).
+3. Create a folder called **`custom_zha_quirks`** **next to your `configuration.yaml`**.
+
+   > **Where do I create it?** Open the File editor and look for `configuration.yaml`. On **HA 2026.x** it's in `/homeassistant/`, on **HA 2025.x and earlier** it's in `/config/`. Create `custom_zha_quirks` in whichever folder contains your `configuration.yaml`. **Do not** create a new folder called `config` -- just put `custom_zha_quirks` directly alongside `configuration.yaml`.
 
 4. Inside `custom_zha_quirks`, create a new file called **`aircube.py`** and paste this content:
 
@@ -139,7 +141,7 @@ ANALOG_OUTPUT_CLUSTER_ID = 0x000D
      enable_quirks: true
    ```
 
-   > **Important:** The trailing `/` on the path is required in Home Assistant 2026.x and works fine on older versions too.
+   > **Note:** Use `/config/custom_zha_quirks/` exactly as shown -- this path works on **both** HA 2025.x and 2026.x, even though the File editor in 2026.x shows the root as `/homeassistant/`. The trailing `/` is required on HA 2026.x. **Do not** change `/config/` to `/homeassistant/` in this setting.
 
    If you already have a `zha:` section, just add the two lines underneath it.
 
@@ -418,7 +420,8 @@ entities:
 ### Temperature and humidity show up but eCO2 / eTVOC / AQI are missing
 
 - The custom quirk (ZHA) or converter (Z2M) is not loaded.
-- **ZHA:** Check that `custom_quirks_path` is set in `configuration.yaml` and the `aircube.py` file is in the right folder. Restart Home Assistant, then remove and re-pair the AirCube.
+- **ZHA:** Check that `custom_quirks_path` is set in `configuration.yaml` and the `aircube.py` file is in the right folder. The path in `configuration.yaml` must be `/config/custom_zha_quirks/` (not `/homeassistant/...`). Restart Home Assistant, then remove and re-pair the AirCube.
+- **ZHA (HA 2026.x):** The File editor shows the root as `/homeassistant/` instead of `/config/`. **Do not** create a new folder called `config` inside `/homeassistant/`. Place `custom_zha_quirks` directly inside `/homeassistant/`, next to `configuration.yaml`. The path in `configuration.yaml` should still say `/config/custom_zha_quirks/`.
 - **Firmware:** Make sure you are running the latest AirCube firmware from this repo. It actively sends attribute reports for the custom cluster so ZHA updates the sensors.
 - **Z2M:** Check that `external_converters` is in the Z2M `configuration.yaml` and `aircube.js` is in the `zigbee2mqtt` folder. Restart Zigbee2MQTT.
 
