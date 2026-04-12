@@ -1,4 +1,5 @@
 -- Copyright 2026 SmartThings Community contributors
+-- Copyright 2026 StuckAtPrototype contributors
 -- SPDX-License-Identifier: Apache-2.0
 --
 -- AirCube (StuckAtPrototype) — custom cluster 0xFC01 for eCO2, eTVOC, AQI.
@@ -29,9 +30,9 @@ local ATTR_AQI = 0x0002
 
 --- Reporting for 0xFC01 (intervals and deltas aligned with AirCube / Z2M example).
 local AIRCUBE_AQ_REPORTING = {
-  { attribute = ATTR_ECO2, min_rep = 1, max_rep = 600, rep_change = 50 },
-  { attribute = ATTR_ETVOC, min_rep = 1, max_rep = 600, rep_change = 1 },
-  { attribute = ATTR_AQI, min_rep = 1, max_rep = 600, rep_change = 5 },
+  { attribute = ATTR_ECO2, min_rep = 30, max_rep = 600, rep_change = 50 },
+  { attribute = ATTR_ETVOC, min_rep = 30, max_rep = 600, rep_change = 1 },
+  { attribute = ATTR_AQI, min_rep = 30, max_rep = 600, rep_change = 5 },
 }
 
 local function emit_eco2(driver, device, value, zb_rx)
@@ -48,6 +49,7 @@ end
 
 local function emit_aqi(driver, device, value, zb_rx)
   if value.value ~= nil and value.value < 65535 then
+    -- ENS16x IAQI is 1–5; airQualitySensor uses the same 1–5 index on SmartThings
     device:emit_event(capabilities.airQualitySensor.airQuality({ value = value.value }))
   end
 end
@@ -151,7 +153,7 @@ local aircube_driver_template = {
       },
     },
   },
-  health_check = false,
+  health_check = false, -- device reports on its own schedule; hub polling not needed
 }
 
 defaults.register_for_default_handlers(
