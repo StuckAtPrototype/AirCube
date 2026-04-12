@@ -32,6 +32,9 @@ static const char *TAG = "button";
 // Long press threshold for Zigbee pairing (in milliseconds)
 #define LONG_PRESS_MS 3000
 
+/* Words; 2048 was too small for zigbee_start_pairing() + esp_zb_lock stack use. */
+#define BUTTON_TASK_STACK_WORDS 4096
+
 // NVS namespace and key for brightness storage
 #define NVS_NAMESPACE "aircube"
 #define NVS_KEY_BRIGHTNESS "led_brightness"
@@ -245,7 +248,7 @@ void button_init(void)
     }
     
     // Create button task
-    BaseType_t task_ret = xTaskCreate(button_task, "button_task", 2048, NULL, 5, NULL);
+    BaseType_t task_ret = xTaskCreate(button_task, "button_task", BUTTON_TASK_STACK_WORDS, NULL, 5, NULL);
     if (task_ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create button task");
         return;
