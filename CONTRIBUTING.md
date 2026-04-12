@@ -1,6 +1,6 @@
 # Contributing to AirCube
 
-AirCube is fully open source -- firmware, hardware, desktop software, and Home Assistant integration. Whether you want to fix a bug, add a feature, improve the docs, or port the desktop app to another platform, contributions are welcome.
+AirCube is fully open source -- firmware, hardware, desktop software, Home Assistant integration, and SmartThings Edge driver. Whether you want to fix a bug, add a feature, improve the docs, or port the desktop app to another platform, contributions are welcome.
 
 This document covers everything you need to get the project building on your machine and understand how the code is organized.
 
@@ -12,6 +12,7 @@ This document covers everything you need to get the project building on your mac
 |----------|----------|
 | Customer-facing README | [README.md](README.md) |
 | Home Assistant setup guide | [HOME_ASSISTANT.md](HOME_ASSISTANT.md) |
+| SmartThings setup guide | [SMARTTHINGS.md](SMARTTHINGS.md) |
 | Issue tracker | [GitHub Issues](https://github.com/StuckAtPrototype/AirCube/issues) |
 | License | [Apache 2.0](LICENSE) |
 
@@ -34,7 +35,7 @@ AirCube/
 │       ├── button.c/h            # Button debounce & brightness cycling
 │       ├── serial_protocol.c/h   # JSON serial command interface (USB)
 │       ├── history.c/h           # 7-day sensor history ring buffer on flash
-│       ├── zigbee.c/h            # Zigbee End Device (ZCL + custom cluster)
+│       ├── zigbee.c/h            # Zigbee End Device (ZCL + custom cluster + brightness)
 │       └── environmental.c/h     # (placeholder / future use)
 │
 ├── scripts/               # Python desktop tools
@@ -61,8 +62,18 @@ AirCube/
 ├── z2m/                   # Zigbee2MQTT external converter
 │   └── aircube.js
 │
+├── smartthings/           # Samsung SmartThings Edge driver (Zigbee hub)
+│   ├── README.md
+│   ├── driver-channel.json
+│   └── aircube-zigbee/    # Driver package (config, fingerprints, profile, Lua)
+│       ├── config.yml
+│       ├── fingerprints.yml
+│       ├── profiles/
+│       └── src/
+│
 ├── README.md              # Customer-facing product page
 ├── HOME_ASSISTANT.md      # Home Assistant integration guide
+├── SMARTTHINGS.md         # SmartThings hub + CLI integration guide
 ├── CONTRIBUTING.md        # This file
 └── LICENSE                # Apache 2.0
 ```
@@ -126,9 +137,11 @@ app_main()
 ```
 ENS210 (I2C)  ──► sensor_task ──► serial JSON output (USB)
 ENS16X (I2C)  ──►      │       ├─► history_record_sample() ──► flash ring buffer
-                        │       └─► zigbee_update_sensors()  ──► Zigbee attribute reports
+                        │       └─► zigbee_update_sensors()  ──► Zigbee attribute reports (every 10s)
                         │
                    AQI value ──► main loop ──► LED color (green-to-red hue mapping)
+                                                    ▲
+              Home Assistant ──► Zigbee Analog Output write ──► led_set_intensity() (brightness)
 ```
 
 ### Module overview
@@ -147,7 +160,7 @@ ENS16X (I2C)  ──►      │       ├─► history_record_sample() ──�
 **Communication**
 
 - `serial_protocol.c` -- JSON-over-USB serial interface. Sends periodic sensor data, accepts commands (see Serial Protocol below).
-- `zigbee.c` -- Registers a Zigbee End Device on the ESP32-H2's native 802.15.4 radio. Exposes temperature/humidity via standard ZCL clusters and eCO2/eTVOC/AQI via custom cluster 0xFC01.
+- `zigbee.c` -- Registers a Zigbee End Device on the ESP32-H2's native 802.15.4 radio. Exposes temperature/humidity via standard ZCL clusters, eCO2/eTVOC/AQI via custom cluster 0xFC01, and LED brightness via the standard Analog Output cluster (0x000D).
 
 **Storage**
 
@@ -223,11 +236,12 @@ The ESP32-H2 has a native IEEE 802.15.4 radio. AirCube registers as a Zigbee End
 |---------|----|-----------|
 | Temperature Measurement | 0x0402 | `measuredValue` (int16, x100 C) |
 | Relative Humidity | 0x0405 | `measuredValue` (uint16, x100 %) |
-| Custom Air Quality | 0xFC01 | `eco2` (0x0000), `etvoc` (0x0001), `aqi` (0x0002) -- all uint16 |
+| Custom Air Quality | 0xFC01 | `eco2` (0x0000), `etvoc` (0x0001), `aqi` (0x0002) -- all uint16, read-only |
+| Analog Output | 0x000D | `presentValue` (float, 0--100) -- LED brightness, writable |
 
-The custom cluster requires a **ZHA quirk** or **Zigbee2MQTT external converter** on the Home Assistant side. Both are included in the repo (`zha/aircube.py` and `z2m/aircube.js`).
+The custom cluster requires a **ZHA quirk** or **Zigbee2MQTT external converter** on the Home Assistant side. Both are included in the repo (`zha/aircube.py` and `z2m/aircube.js`). On a **Samsung SmartThings** hub, use the Edge driver in `smartthings/aircube-zigbee/` and follow [SMARTTHINGS.md](SMARTTHINGS.md).
 
-See [HOME_ASSISTANT.md](HOME_ASSISTANT.md) for setup instructions.
+See [HOME_ASSISTANT.md](HOME_ASSISTANT.md) for Home Assistant setup instructions.
 
 ### Pairing behavior
 
@@ -330,6 +344,7 @@ Open a [GitHub Issue](https://github.com/StuckAtPrototype/AirCube/issues) with:
 
 ### Ideas for contributions
 
+- **SmartThings** -- driver improvements; WWST certification with Samsung ([certification overview](https://developer.smartthings.com/docs/certification/overview))
 - **New sensor support** -- PM2.5, CO, noise level
 - **Web dashboard** -- local web server on the ESP32-H2 or a companion app
 - **macOS / Linux tray app** -- the current tray app is Windows-only
