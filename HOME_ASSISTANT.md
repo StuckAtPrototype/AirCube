@@ -342,6 +342,7 @@ entities:
 - **Firmware:** Make sure you are running the latest AirCube firmware from this repo. It actively sends attribute reports for the custom cluster so ZHA updates the sensors.
 - **Z2M 2.x:** Make sure you're using `aircube.mjs` (not `aircube.js`). Z2M 2.x requires ES module format. If Z2M renames the file to `aircube.mjs.invalid`, the converter has a load error — check the Z2M logs.
 - **Z2M 1.x:** Check that `external_converters` is in the Z2M `configuration.yaml` and `aircube.js` is in the `zigbee2mqtt` folder. Restart Zigbee2MQTT.
+- **Firmware version:** The device reports its build as the Zigbee Basic cluster **Software build ID** (`sw_build_id`, attribute `0x4000` on cluster `0x0000`, endpoint `10`). In ZHA you can read it under the device’s **Manage Zigbee device** UI. The string comes from ESP-IDF’s app version (`firmware/version.txt` at build time).
 
 ### eCO2 / eTVOC / AQI values are stuck at 0
 

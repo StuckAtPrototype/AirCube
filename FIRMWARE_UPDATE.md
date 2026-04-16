@@ -13,8 +13,8 @@ This guide walks you through updating your AirCube firmware using Espressif's we
 
 ### 1) Download the firmware
 
-1. Go to the [latest release](https://github.com/StuckAtPrototype/AirCube/releases/tag/Release_V1.3_HA).
-2. Under **Assets**, download `AirCube_firmware_v.1.3.bin`.
+1. Go to the [latest release](https://github.com/StuckAtPrototype/AirCube/releases).
+2. Under **Assets**, download the `AirCube_firmware_v*.bin` file for the version you want.
 3. Save it somewhere you can find it (e.g. your Downloads folder).
 
 ### 2) Open ESP Launchpad
@@ -31,7 +31,7 @@ This guide walks you through updating your AirCube firmware using Espressif's we
 ### 4) Select DIY mode and add the firmware file
 
 1. In ESP Launchpad, select the **DIY** tab from the top menu.
-2. Click **Add File** and select the `AirCube_firmware_v.1.3.bin` you downloaded.
+2. Click **Add File** and select the firmware `.bin` you downloaded.
 3. Set the **Flash Address** to `0x0`.
 4. Verify the file and address appear in the table.
 

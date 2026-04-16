@@ -6,7 +6,7 @@
  * via standard and custom ZCL clusters.
  *
  * Clusters on Endpoint 10:
- *   - Basic (0x0000)             : Device identity
+ *   - Basic (0x0000)             : Device identity, SWBuildID (firmware version)
  *   - Identify (0x0003)          : Standard identify
  *   - Temperature Meas (0x0402)  : Actual temperature in 0.01 C
  *   - Humidity Meas (0x0405)     : Actual humidity in 0.01 %
@@ -21,7 +21,10 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <string.h>
+
 #include "esp_check.h"
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -51,13 +54,22 @@ static const char *TAG = "zigbee";
 #define MANUFACTURER_NAME           "\x10" "StuckAtPrototype"
 #define MODEL_IDENTIFIER            "\x07" "AirCube"
 
+/* ZCL char string: length byte + payload. Basic cluster SWBuildID max 16 chars (Zigbee 3.0). */
+#define SW_BUILD_ZCL_MAX_CHARS      16
+#define SW_BUILD_ZCL_BUF_LEN        (SW_BUILD_ZCL_MAX_CHARS + 1)
+
 /* ── State ───────────────────────────────────────────────────────────── */
 
-static volatile bool s_connected = false;
-static volatile bool s_pairing   = false;
+static volatile bool s_connected  = false;
+static volatile bool s_pairing    = false;
+static volatile bool s_rejoining  = false;
 static TickType_t    s_pairing_start = 0;
+static uint32_t      s_rejoin_backoff_ms = 0;
+static uint8_t       s_sw_build_id[SW_BUILD_ZCL_BUF_LEN];
 
-#define PAIRING_TIMEOUT_MS  60000   /* Auto-cancel pairing after 60 s */
+#define PAIRING_TIMEOUT_MS      60000   /* Auto-cancel pairing after 60 s */
+#define REJOIN_BACKOFF_INIT_MS  1000    /* First rejoin attempt after 1 s  */
+#define REJOIN_BACKOFF_MAX_MS   300000  /* Cap backoff at 5 minutes        */
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 
@@ -71,6 +83,18 @@ static int16_t temp_to_zb(float temp_c)
 static uint16_t humidity_to_zb(float rh)
 {
     return (uint16_t)(rh * 100.0f);
+}
+
+/** Zigbee ZCL char string (length-prefixed) from ESP-IDF app image version. */
+static void init_sw_build_id(void)
+{
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    size_t n = strnlen(app_desc->version, sizeof(app_desc->version));
+    if (n > SW_BUILD_ZCL_MAX_CHARS) {
+        n = SW_BUILD_ZCL_MAX_CHARS;
+    }
+    s_sw_build_id[0] = (uint8_t)n;
+    memcpy(&s_sw_build_id[1], app_desc->version, n);
 }
 
 static void report_attr(uint16_t cluster_id, uint16_t attr_id)
@@ -87,6 +111,27 @@ static void report_attr(uint16_t cluster_id, uint16_t attr_id)
     report_cmd.manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC;
     report_cmd.attributeID = attr_id;
     esp_zb_zcl_report_attr_cmd_req(&report_cmd);
+}
+
+/* ── Forward declarations ─────────────────────────────────────────────── */
+
+static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask);
+
+/* ── Rejoin helper (exponential backoff) ──────────────────────────────── */
+
+static void schedule_rejoin(void)
+{
+    if (!s_rejoining) {
+        s_rejoining = true;
+        s_rejoin_backoff_ms = REJOIN_BACKOFF_INIT_MS;
+    }
+    ESP_LOGW(TAG, "Scheduling rejoin in %lu ms", (unsigned long)s_rejoin_backoff_ms);
+    esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb,
+                           ESP_ZB_BDB_MODE_NETWORK_STEERING, s_rejoin_backoff_ms);
+    s_rejoin_backoff_ms *= 2;
+    if (s_rejoin_backoff_ms > REJOIN_BACKOFF_MAX_MS) {
+        s_rejoin_backoff_ms = REJOIN_BACKOFF_MAX_MS;
+    }
 }
 
 /* ── NVS pairing flag (survives the reboot caused by factory_reset) ─── */
@@ -199,8 +244,10 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                      extended_pan_id[1], extended_pan_id[0],
                      esp_zb_get_pan_id(), esp_zb_get_current_channel(),
                      esp_zb_get_short_address());
-            s_connected = true;
-            s_pairing   = false;
+            s_connected  = true;
+            s_pairing    = false;
+            s_rejoining  = false;
+            s_rejoin_backoff_ms = REJOIN_BACKOFF_INIT_MS;
         } else {
             if (s_pairing &&
                 (xTaskGetTickCount() - s_pairing_start) < pdMS_TO_TICKS(PAIRING_TIMEOUT_MS)) {
@@ -208,10 +255,57 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                          esp_err_to_name(err_status));
                 esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb,
                                        ESP_ZB_BDB_MODE_NETWORK_STEERING, 1000);
+            } else if (s_rejoining) {
+                ESP_LOGW(TAG, "Rejoin steering failed (%s), backing off",
+                         esp_err_to_name(err_status));
+                schedule_rejoin();
             } else {
                 ESP_LOGW(TAG, "Network steering stopped – %s",
                          s_pairing ? "timed out" : "no pairing requested");
                 s_pairing = false;
+            }
+        }
+        break;
+
+    case ESP_ZB_ZDO_SIGNAL_LEAVE: {
+        esp_zb_zdo_signal_leave_params_t *leave_params =
+            (esp_zb_zdo_signal_leave_params_t *)esp_zb_app_signal_get_params(p_sg_p);
+        uint8_t leave_type = leave_params ? leave_params->leave_type : 0xFF;
+        ESP_LOGW(TAG, "Left network (leave_type: 0x%x)", leave_type);
+        s_connected = false;
+        if (!s_pairing) {
+            schedule_rejoin();
+        }
+        break;
+    }
+
+    case ESP_ZB_NLME_STATUS_INDICATION: {
+        esp_zb_zdo_signal_nwk_status_indication_params_t *nwk_status =
+            (esp_zb_zdo_signal_nwk_status_indication_params_t *)esp_zb_app_signal_get_params(p_sg_p);
+        uint8_t status  = nwk_status ? nwk_status->status       : 0xFF;
+        uint16_t addr   = nwk_status ? nwk_status->network_addr : 0xFFFF;
+        ESP_LOGW(TAG, "Network status indication: 0x%02x, addr: 0x%04x", status, addr);
+        if (status == ESP_ZB_NWK_COMMAND_STATUS_PARENT_LINK_FAILURE) {
+            ESP_LOGW(TAG, "Parent link failure – marking disconnected");
+            s_connected = false;
+            if (!s_rejoining && !s_pairing) {
+                schedule_rejoin();
+            }
+        }
+        break;
+    }
+
+    case ESP_ZB_BDB_SIGNAL_TC_REJOIN_DONE:
+        if (err_status == ESP_OK) {
+            ESP_LOGI(TAG, "Trust Center rejoin succeeded");
+            s_connected  = true;
+            s_rejoining  = false;
+            s_rejoin_backoff_ms = REJOIN_BACKOFF_INIT_MS;
+        } else {
+            ESP_LOGW(TAG, "Trust Center rejoin failed (%s)", esp_err_to_name(err_status));
+            s_connected = false;
+            if (!s_pairing) {
+                schedule_rejoin();
             }
         }
         break;
@@ -230,12 +324,15 @@ static esp_zb_cluster_list_t *create_cluster_list(void)
 {
     esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
 
-    /* ---- Basic cluster (mandatory, carries device identity) ---- */
+    /* ---- Basic cluster (mandatory: identity + firmware version for coordinators) ---- */
+    init_sw_build_id();
     esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(NULL);
     ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster,
         ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, (void *)MANUFACTURER_NAME));
     ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster,
         ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, (void *)MODEL_IDENTIFIER));
+    ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster,
+        ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID, (void *)s_sw_build_id));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_basic_cluster(cluster_list,
         basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 
