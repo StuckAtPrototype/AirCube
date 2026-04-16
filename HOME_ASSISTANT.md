@@ -423,6 +423,7 @@ entities:
 - **ZHA:** Check that `custom_quirks_path` is set in `configuration.yaml` and the `aircube.py` file is in the right folder. The path in `configuration.yaml` must be `/config/custom_zha_quirks/` (not `/homeassistant/...`). Restart Home Assistant, then remove and re-pair the AirCube.
 - **ZHA (HA 2026.x):** The File editor shows the root as `/homeassistant/` instead of `/config/`. **Do not** create a new folder called `config` inside `/homeassistant/`. Place `custom_zha_quirks` directly inside `/homeassistant/`, next to `configuration.yaml`. The path in `configuration.yaml` should still say `/config/custom_zha_quirks/`.
 - **Firmware:** Make sure you are running the latest AirCube firmware from this repo. It actively sends attribute reports for the custom cluster so ZHA updates the sensors.
+- **Firmware version:** The device reports its build as the Zigbee Basic cluster **Software build ID** (`sw_build_id`, attribute `0x4000` on cluster `0x0000`, endpoint `10`). In ZHA you can read it under the device’s **Manage Zigbee device** UI. The string comes from ESP-IDF’s app version (`firmware/version.txt` at build time).
 - **Z2M:** Check that `external_converters` is in the Z2M `configuration.yaml` and `aircube.js` is in the `zigbee2mqtt` folder. Restart Zigbee2MQTT.
 
 ### eCO2 / eTVOC / AQI values are stuck at 0

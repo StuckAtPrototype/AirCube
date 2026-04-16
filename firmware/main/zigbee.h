@@ -3,9 +3,10 @@
  * @brief Zigbee integration for AirCube
  *
  * Exposes temperature, humidity, eCO2, eTVOC, and AQI over Zigbee
- * using standard ZCL clusters (temp/humidity), a manufacturer-specific
- * custom cluster (0xFC01) for air quality metrics, and the standard
- * Analog Output cluster (0x000D) for LED brightness control.
+ * using standard ZCL clusters (temp/humidity), Basic cluster SWBuildID
+ * for firmware version, a manufacturer-specific custom cluster (0xFC01)
+ * for air quality metrics, and the standard Analog Output cluster (0x000D)
+ * for LED brightness control.
  *
  * @author StuckAtPrototype, LLC
  */
