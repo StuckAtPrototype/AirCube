@@ -3,6 +3,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_pm.h"
+#include "esp_task_wdt.h"
 #include "nvs_flash.h"
 #include "led_color_lib.h"
 
@@ -170,8 +171,12 @@ void command_task(void *pvParameters)
 void sensor_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "Sensor task started");
-    
+
+    esp_task_wdt_add(NULL);
+
     while (1) {
+        esp_task_wdt_reset();
+
         // Read ENS210 temperature and humidity
         ens210_read_envir();
         float temp_c = ens210_get_temperature(1); // 1 = Celsius
@@ -197,7 +202,7 @@ void sensor_task(void *pvParameters)
         int aqi = ens16x_read_aqi();
         int aqi_uba = ens16x_read_aqi_uba();
         enum ENS_STATUS ens16x_status = ens16x_get_status();
-        
+
         // Update global variables for LED color mapping
         current_aqi = aqi;
         current_ens16x_status = ens16x_status;
@@ -244,7 +249,7 @@ void sensor_task(void *pvParameters)
             last_zb_update = now;
             zigbee_update_sensors(temp_c, humidity, eco2, etvoc, aqi);
         }
-        
+
         // Wait for configurable period before next reading
         uint32_t period = get_sensor_readout_period_ms();
         vTaskDelay(period / portTICK_PERIOD_MS);
