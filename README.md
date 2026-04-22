@@ -140,7 +140,7 @@ python aircube_app.py
 
 Select your serial port, click **Connect**, and you'll see live data.
 
-> **Tip:** There's also a lightweight **system tray app** (`aircube_tray.py`) that shows AQI directly in your Windows taskbar. Right-click the tray icon for options.
+> **Tip:** Prefer a minimal taskbar-only view? See the companion [**AirCube Tray**](https://github.com/StuckAtPrototype/AirCubeTray) repo -- a lightweight Windows system-tray app that shows AQI as a live, color-coded number in your taskbar. It ships its own installer.
 
 ---
 
