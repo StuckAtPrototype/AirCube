@@ -40,12 +40,10 @@ AirCube/
 │
 ├── scripts/               # Python desktop tools
 │   ├── aircube_app.py             # Full GUI app (PyQt/Matplotlib)
-│   ├── aircube_tray.py            # Windows system tray AQI monitor
 │   ├── aircube_logger.py          # Headless CSV logger
 │   ├── aircube_data_visualizer.py # CSV live viewer (no serial)
 │   ├── aircube_replay_script.py   # Replay logged CSV with timing
 │   ├── build_exe.py               # PyInstaller build for desktop app
-│   ├── build_tray.py              # PyInstaller build for tray app
 │   ├── aircube.spec               # PyInstaller spec
 │   └── requirements.txt
 │
@@ -269,13 +267,9 @@ Live sensor display, color-coded AQI, three-panel charts (temp/humidity, AQI, ga
 python aircube_app.py
 ```
 
-### aircube_tray.py -- System tray monitor (Windows)
+### AirCube Tray -- system tray monitor (separate repo)
 
-Shows AQI as a number in the Windows taskbar. Color-coded icon, tooltip with all readings, optional AQI threshold alerts, start-with-Windows option.
-
-```bash
-python aircube_tray.py
-```
+For a minimal Windows taskbar-only view of AQI, see the companion [**AirCubeTray** repo](https://github.com/StuckAtPrototype/AirCubeTray). It ships its own installer and auto-detects the AirCube over USB.
 
 ### Other scripts
 
@@ -291,8 +285,9 @@ python aircube_tray.py
 pip install pyinstaller
 
 python build_exe.py     # Produces dist/AirCube.exe
-python build_tray.py    # Produces dist/AirCubeTray.exe
 ```
+
+The standalone tray app build lives in its own repo: [AirCubeTray](https://github.com/StuckAtPrototype/AirCubeTray).
 
 ---
 
