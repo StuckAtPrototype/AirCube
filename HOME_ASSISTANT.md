@@ -137,11 +137,11 @@ ANALOG_OUTPUT_CLUSTER_ID = 0x000D
 
    ```yaml
    zha:
-     custom_quirks_path: /config/custom_zha_quirks/
+     custom_quirks_path: config/custom_zha_quirks/
      enable_quirks: true
    ```
 
-   > **Note:** Use `/config/custom_zha_quirks/` exactly as shown -- this path works on **both** HA 2025.x and 2026.x, even though the File editor in 2026.x shows the root as `/homeassistant/`. The trailing `/` is required on HA 2026.x. **Do not** change `/config/` to `/homeassistant/` in this setting.
+   > **Note:** Use `config/custom_zha_quirks/` exactly as shown -- this path works on **both** HA 2025.x and 2026.x, even though the File editor in 2026.x shows the root as `/homeassistant/`. The trailing `/` is required on HA 2026.x. **Do not** change `/config/` to `/homeassistant/` in this setting.
 
    If you already have a `zha:` section, just add the two lines underneath it.
 
