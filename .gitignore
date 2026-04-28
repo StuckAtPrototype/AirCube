@@ -26,3 +26,6 @@ scripts/build/
 
 # Local release staging
 releases/
+
+scripts/mac/build
+scripts/mac/dist
