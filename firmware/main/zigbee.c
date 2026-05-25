@@ -114,7 +114,14 @@ static void init_sw_build_id(void)
 
 static float current_brightness_percent(void)
 {
-    return led_get_intensity() * 100.0f;
+    float pct = led_get_intensity() * 100.0f;
+    if (pct < 0.0f) {
+        return 0.0f;
+    }
+    if (pct > 100.0f) {
+        return 100.0f;
+    }
+    return (float)((uint8_t)(pct + 0.5f));
 }
 
 static void report_attr(uint16_t cluster_id, uint16_t attr_id)
