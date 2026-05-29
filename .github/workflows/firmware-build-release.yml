@@ -12,22 +12,68 @@ jobs:
   prepare-version:
     runs-on: ubuntu-latest
     outputs:
-      base_version: ${{ steps.semver.outputs.base_version }}
-      next_version: ${{ steps.semver.outputs.next_version }}
       release_version: ${{ steps.semver.outputs.release_version }}
       release_tag: ${{ steps.semver.outputs.release_tag }}
-      prerelease: ${{ steps.semver.outputs.prerelease }}
-      make_latest: ${{ steps.semver.outputs.make_latest }}
+      should_release: ${{ steps.semver.outputs.should_release }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Compute semantic version
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install semantic-release dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+
+      - name: Compute release version (semantic-release dry run)
         id: semver
         shell: bash
-        run: ./.github/scripts/compute_semver.sh "${{ github.ref_name }}" "${{ github.run_number }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1 || true)"
+
+          if [[ -n "$latest_tag" ]]; then
+            current_version="${latest_tag#v}"
+          else
+            current_version="0.0.0"
+          fi
+
+          semrel_log="$(mktemp)"
+
+          npx semantic-release --dry-run --no-ci >"$semrel_log" 2>&1 || {
+            cat "$semrel_log"
+            exit 1
+          }
+
+          next_version="$(sed -nE 's/.*next release version is ([0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?).*/\1/ip' "$semrel_log" | tail -n 1)"
+
+          if [[ -n "$next_version" ]]; then
+            release_version="$next_version"
+            should_release="true"
+          else
+            release_version="$current_version"
+            should_release="false"
+          fi
+
+          release_tag="v${release_version}"
+
+          {
+            echo "release_version=$release_version"
+            echo "release_tag=$release_tag"
+            echo "should_release=$should_release"
+          } >> "$GITHUB_OUTPUT"
+
+          cat "$semrel_log"
 
   build-firmware:
     runs-on: ubuntu-latest
@@ -37,13 +83,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set firmware version for this build
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "${{ needs.prepare-version.outputs.release_version }}" > firmware/version.txt
-          cat firmware/version.txt
           
       - name: Initialize ESP-IDF environment
         shell: bash
@@ -60,7 +99,7 @@ jobs:
           . /opt/esp/idf/export.sh
           cd firmware
           idf.py set-target esp32h2
-          idf.py build
+          idf.py -DPROJECT_VER="${{ needs.prepare-version.outputs.release_version }}" build
 
       - name: Stage release artifacts
         shell: bash
@@ -83,11 +122,23 @@ jobs:
     needs:
       - prepare-version
       - build-firmware
+    if: ${{ needs.prepare-version.outputs.should_release == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install semantic-release dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
 
       - name: Download firmware artifacts
         uses: actions/download-artifact@v4
@@ -95,21 +146,7 @@ jobs:
           name: firmware-${{ needs.prepare-version.outputs.release_version }}
           path: out
 
-      - name: Generate grouped release notes
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./.github/scripts/generate_release_notes.sh "${{ needs.prepare-version.outputs.release_version }}" "${{ github.ref_name }}" "${{ needs.prepare-version.outputs.base_version }}" "${{ github.sha }}"
-
-      - name: Publish GitHub Release
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ needs.prepare-version.outputs.release_tag }}
-          name: Firmware ${{ needs.prepare-version.outputs.release_version }}
-          artifacts: out/*.bin
-          artifactErrorsFailBuild: true
-          allowUpdates: true
-          removeArtifacts: true
-          bodyFile: RELEASE_NOTES.md
-          prerelease: ${{ needs.prepare-version.outputs.prerelease }}
-          makeLatest: ${{ needs.prepare-version.outputs.make_latest }}
+      - name: Publish GitHub Release with semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release

@@ -1,0 +1,11 @@
+{
+  "name": "aircube-release",
+  "private": true,
+  "description": "Release automation config for AirCube firmware",
+  "devDependencies": {
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/github": "^11.0.4",
+    "@semantic-release/release-notes-generator": "^14.1.0",
+    "semantic-release": "^24.2.7"
+  }
+}
