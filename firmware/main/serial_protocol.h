@@ -12,9 +12,13 @@
 // Initialize serial protocol
 void serial_protocol_init(void);
 
-// Send sensor data as JSON
+// Send sensor data as JSON.
+//   aqi   - canonical AirCube AQI (TVOC-derived, 0-500)
+//   aqi_s - legacy ENS161 relative AQI-S (0-500)
+//   aqi_uba - ENS161 UBA hygienic rating (1-5)
 void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float humidity,
-                             const char* ens16x_status_str, int etvoc, int eco2, int aqi, int aqi_uba);
+                             const char* ens16x_status_str, int etvoc, int eco2,
+                             int aqi, int aqi_s, int aqi_uba);
 
 // Process incoming commands (call periodically)
 void serial_process_commands(void);

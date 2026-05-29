@@ -52,7 +52,7 @@ ANALOG_OUTPUT_CLUSTER_ID = 0x000D
         unit="ppb",
         device_class=SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS,
         state_class=SensorStateClass.MEASUREMENT,
-        fallback_name="Volatile organic compounds",
+        fallback_name="tVOC",
     )
     .sensor(
         AirQualityCluster.AttributeDefs.aqi.name,
@@ -60,7 +60,7 @@ ANALOG_OUTPUT_CLUSTER_ID = 0x000D
         endpoint_id=10,
         device_class=SensorDeviceClass.AQI,
         state_class=SensorStateClass.MEASUREMENT,
-        fallback_name="Air quality index",
+        fallback_name="AQI (TVOC)",
     )
     .number(
         "present_value",

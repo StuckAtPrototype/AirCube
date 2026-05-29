@@ -1,33 +1,31 @@
 /**
- * Zigbee2MQTT External Converter for AirCube (Z2M 1.x)
+ * Zigbee2MQTT External Converter for AirCube (Z2M 2.x)
  *
- * This file uses CommonJS format for Z2M 1.x. For Z2M 2.x, use aircube.mjs instead.
+ * Z2M 2.x requires ES module format (.mjs). For Z2M 1.x, use aircube.js instead.
  *
- * Place this file in your Zigbee2MQTT data directory and reference it
- * in configuration.yaml:
+ * Place this file in your Zigbee2MQTT external_converters directory and
+ * reference it in configuration.yaml:
  *
  *   external_converters:
- *     - aircube.js
+ *     - external_converters/aircube.mjs
  *
  * Custom cluster 0xFC01 attributes (matches zha/aircube.py):
  *   0x0000 = eco2  (uint16, ppm)
  *   0x0001 = etvoc (uint16, ppb)
  *   0x0002 = aqi   (uint16, TVOC-derived AQI, 0-500)
- *
- * Analog Output cluster 0x000D (writable):
- *   presentValue (float, 0-100 brightness)
  */
 
-const {temperature, humidity} = require('zigbee-herdsman-converters/lib/modernExtend');
-const exposes = require('zigbee-herdsman-converters/lib/exposes');
+import {temperature, humidity} from 'zigbee-herdsman-converters/lib/modernExtend';
+import * as exposes from 'zigbee-herdsman-converters/lib/exposes';
+
 const e = exposes.presets;
 
-const CUSTOM_CLUSTER_ID = 0xFC01;
+// Z2M 2.x requires the cluster ID as a string for custom (non-standard) clusters.
+const CUSTOM_CLUSTER_ID = '64513'; // 0xFC01
+
 const ATTR_ECO2  = 0x0000;
 const ATTR_ETVOC = 0x0001;
 const ATTR_AQI   = 0x0002;
-
-const ANALOG_OUTPUT_CLUSTER = 'genAnalogOutput';
 
 const fzAirCubeAirQuality = {
     cluster: CUSTOM_CLUSTER_ID,
@@ -47,24 +45,25 @@ const fzAirCubeAirQuality = {
     },
 };
 
-const fzAirCubeBrightness = {
-    cluster: ANALOG_OUTPUT_CLUSTER,
+const fzBrightness = {
+    cluster: 'genAnalogOutput',
     type: ['attributeReport', 'readResponse'],
     convert: (model, msg, publish, options, meta) => {
         if (msg.data.hasOwnProperty('presentValue')) {
-            return {brightness: Math.round(msg.data.presentValue)};
+            return { brightness: Math.round(msg.data['presentValue']) };
         }
     },
 };
 
-const tzAirCubeBrightness = {
+const tzBrightness = {
     key: ['brightness'],
     convertSet: async (entity, key, value, meta) => {
-        await entity.write(ANALOG_OUTPUT_CLUSTER, {presentValue: value});
-        return {state: {brightness: value}};
+        const clamped = Math.min(100, Math.max(0, value));
+        await entity.write('genAnalogOutput', { presentValue: clamped });
+        return { state: { brightness: clamped } };
     },
     convertGet: async (entity, key, meta) => {
-        await entity.read(ANALOG_OUTPUT_CLUSTER, ['presentValue']);
+        await entity.read('genAnalogOutput', ['presentValue']);
     },
 };
 
@@ -77,8 +76,8 @@ const definition = {
         temperature(),
         humidity(),
     ],
-    fromZigbee: [fzAirCubeAirQuality, fzAirCubeBrightness],
-    toZigbee: [tzAirCubeBrightness],
+    fromZigbee: [fzAirCubeAirQuality, fzBrightness],
+    toZigbee: [tzBrightness],
     exposes: [
         e.numeric('eco2', exposes.access.STATE)
             .withUnit('ppm')
@@ -96,6 +95,7 @@ const definition = {
             .withValueMin(0)
             .withValueMax(500),
         e.numeric('brightness', exposes.access.ALL)
+            .withUnit('%')
             .withDescription('Brightness')
             .withValueMin(0)
             .withValueMax(100),
@@ -120,4 +120,4 @@ const definition = {
     },
 };
 
-module.exports = definition;
+export default definition;

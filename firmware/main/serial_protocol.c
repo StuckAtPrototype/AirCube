@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include "led.h"
 #include "history.h"
 #include "freertos/FreeRTOS.h"
@@ -19,8 +20,17 @@ static const char *TAG = "serial_protocol";
 
 #define RX_BUF_SIZE 256
 #define JSON_OUTPUT_BUF_SIZE 512
-#define HISTORY_PAGE_BUF_SIZE 8192  // ~48 slots x ~150 bytes each
+// A single history slot can reach ~200 bytes once every numeric field is 4
+// digits wide (seen in real logs, e.g. v_x=2286, c_a=1252). 48 slots * 200
+// bytes plus the JSON envelope is ~9800 bytes, so keep a comfortable margin
+// above the worst case to avoid any possibility of truncation.
+#define HISTORY_PAGE_BUF_SIZE 12288
 #define HISTORY_MAX_PAGE_SIZE 48    // Max slots per page request
+// Largest slot footprint we will ever attempt to append. If adding another
+// slot would push us past (HISTORY_PAGE_BUF_SIZE - HISTORY_SLOT_MAX_BYTES -
+// HISTORY_FOOTER_BYTES) we stop early and report the actual count.
+#define HISTORY_SLOT_MAX_BYTES 220
+#define HISTORY_FOOTER_BYTES   64
 
 // External function to get readout period (defined in main.c)
 extern uint32_t get_sensor_readout_period_ms(void);
@@ -49,7 +59,8 @@ void serial_protocol_init(void)
 }
 
 void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float humidity,
-                             const char* ens16x_status_str, int etvoc, int eco2, int aqi, int aqi_uba)
+                             const char* ens16x_status_str, int etvoc, int eco2,
+                             int aqi, int aqi_s, int aqi_uba)
 {
     char json_buffer[JSON_OUTPUT_BUF_SIZE];
     
@@ -59,13 +70,16 @@ void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float h
     // Convert Celsius to Fahrenheit
     float temperature_f = temperature_c * 9.0f / 5.0f + 32.0f;
     
-    // Format JSON output
+    // Format JSON output. Note: "aqi" is the canonical AirCube AQI
+    // (TVOC-derived, 0-500) starting in firmware 1.5.0. The previous AQI-S
+    // value moved to "aqi_s" - this is a breaking change for any consumer
+    // that was reading "aqi" as AQI-S in older firmware.
     int len = snprintf(json_buffer, sizeof(json_buffer),
         "{\"ens210\":{\"status\":%u,\"temperature_c\":%.2f,\"temperature_f\":%.2f,\"humidity\":%.2f},"
-        "\"ens16x\":{\"status\":\"%s\",\"etvoc\":%d,\"eco2\":%d,\"aqi\":%d,\"aqi_uba\":%d},"
+        "\"ens16x\":{\"status\":\"%s\",\"etvoc\":%d,\"eco2\":%d,\"aqi\":%d,\"aqi_s\":%d,\"aqi_uba\":%d},"
         "\"timestamp\":%lu}\n",
         ens210_status, temperature_c, temperature_f, humidity,
-        ens16x_status_str, etvoc, eco2, aqi, aqi_uba,
+        ens16x_status_str, etvoc, eco2, aqi, aqi_s, aqi_uba,
         (unsigned long)timestamp);
     
     if (len > 0 && len < sizeof(json_buffer)) {
@@ -152,26 +166,64 @@ void serial_send_history_page(uint16_t start, uint16_t count)
         count = entry_count - start;
     }
 
-    // Allocate buffer on stack for the JSON response
+    // Allocate buffer on the heap for the JSON response
     char *buf = malloc(HISTORY_PAGE_BUF_SIZE);
     if (buf == NULL) {
         send_error("out of memory");
         return;
     }
 
-    int pos = snprintf(buf, HISTORY_PAGE_BUF_SIZE,
-        "{\"history\":[");
+    // Tracks how many slots we actually serialized. We report this in the
+    // response so the client doesn't advance past missing/truncated entries.
+    uint16_t emitted = 0;
+    size_t pos = 0;
+    size_t saved_pos = 0;
+
+    // safe_append: appends via snprintf while guaranteeing pos never exceeds
+    // HISTORY_PAGE_BUF_SIZE - 1. Returns false if the write would overflow, in
+    // which case pos is left unchanged so the caller can roll back.
+    #define SAFE_APPEND(...) ({                                                \
+        bool _ok = false;                                                      \
+        if (pos < HISTORY_PAGE_BUF_SIZE) {                                     \
+            size_t _remaining = HISTORY_PAGE_BUF_SIZE - pos;                   \
+            int _written = snprintf(buf + pos, _remaining, __VA_ARGS__);       \
+            if (_written > 0 && (size_t)_written < _remaining) {               \
+                pos += (size_t)_written;                                       \
+                _ok = true;                                                    \
+            }                                                                  \
+        }                                                                      \
+        _ok;                                                                   \
+    })
+
+    if (!SAFE_APPEND("{\"history\":[")) {
+        send_error("buffer overflow");
+        free(buf);
+        return;
+    }
 
     for (uint16_t i = 0; i < count; i++) {
-        history_slot_t slot;
-        esp_err_t err = history_read_slot(start + i, &slot);
-
-        if (i > 0) {
-            pos += snprintf(buf + pos, HISTORY_PAGE_BUF_SIZE - pos, ",");
+        // Check up front whether there is enough room to fit another worst-
+        // case slot plus the JSON footer. If not, stop cleanly; pos and
+        // emitted reflect what we actually produced.
+        if (pos + HISTORY_SLOT_MAX_BYTES + HISTORY_FOOTER_BYTES >= HISTORY_PAGE_BUF_SIZE) {
+            break;
         }
 
+        // Remember position in case we have to roll back a partial entry
+        saved_pos = pos;
+
+        if (i > 0) {
+            if (!SAFE_APPEND(",")) {
+                pos = saved_pos;
+                break;
+            }
+        }
+
+        history_slot_t slot;
+        esp_err_t err = history_read_slot(start + i, &slot);
+        bool ok;
         if (err == ESP_OK) {
-            pos += snprintf(buf + pos, HISTORY_PAGE_BUF_SIZE - pos,
+            ok = SAFE_APPEND(
                 "{\"seq\":%u,"
                 "\"t_a\":%d,\"t_n\":%d,\"t_x\":%d,"
                 "\"h_a\":%d,\"h_n\":%d,\"h_x\":%d,"
@@ -185,22 +237,32 @@ void serial_send_history_page(uint16_t start, uint16_t count)
                 slot.eco2_avg, slot.eco2_min, slot.eco2_max,
                 slot.etvoc_avg, slot.etvoc_min, slot.etvoc_max);
         } else {
-            pos += snprintf(buf + pos, HISTORY_PAGE_BUF_SIZE - pos, "null");
+            ok = SAFE_APPEND("null");
         }
 
-        if (pos >= HISTORY_PAGE_BUF_SIZE - 64) {
-            // Buffer getting full, truncate
+        if (!ok) {
+            // Couldn't fit this entry – roll back the comma too
+            pos = saved_pos;
             break;
         }
+
+        emitted++;
     }
 
-    pos += snprintf(buf + pos, HISTORY_PAGE_BUF_SIZE - pos,
-        "],\"start\":%u,\"count\":%u}\n", start, count);
-
-    if (pos > 0 && pos < HISTORY_PAGE_BUF_SIZE) {
-        printf("%s", buf);
-        fflush(stdout);
+    // Closing footer: always report the actual number of emitted slots so the
+    // client advances its cursor correctly even if we truncated.
+    if (!SAFE_APPEND("],\"start\":%u,\"count\":%u}\n", start, emitted)) {
+        // Should be impossible given the reservation above, but guard anyway
+        ESP_LOGW(TAG, "history footer truncated (pos=%u)", (unsigned)pos);
+        send_error("buffer overflow");
+        free(buf);
+        return;
     }
+
+    #undef SAFE_APPEND
+
+    printf("%s", buf);
+    fflush(stdout);
 
     free(buf);
 }

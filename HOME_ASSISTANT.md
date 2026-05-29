@@ -107,7 +107,7 @@ ANALOG_OUTPUT_CLUSTER_ID = 0x000D
         unit="ppb",
         device_class=SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS,
         state_class=SensorStateClass.MEASUREMENT,
-        fallback_name="Volatile organic compounds",
+        fallback_name="tVOC",
     )
     .sensor(
         AirQualityCluster.AttributeDefs.aqi.name,
@@ -115,7 +115,7 @@ ANALOG_OUTPUT_CLUSTER_ID = 0x000D
         endpoint_id=10,
         device_class=SensorDeviceClass.AQI,
         state_class=SensorStateClass.MEASUREMENT,
-        fallback_name="Air quality index",
+        fallback_name="AQI (TVOC)",
     )
     .number(
         "present_value",
@@ -162,15 +162,15 @@ ANALOG_OUTPUT_CLUSTER_ID = 0x000D
 
 ## A4 -- Verify Sensors
 
-Go to **Settings > Devices & Services > ZHA** and click on the AirCube device. You should see five sensors and a brightness control:
+Go to **Settings > Devices & Services > ZHA** and click on the AirCube device. You should see six entities:
 
 | Entity | What It Does | Unit |
 |--------|-------------|------|
 | Temperature | Room temperature | C |
 | Humidity | Relative humidity | % |
 | Equivalent CO2 | eCO2 concentration (estimated) | ppm |
-| Volatile organic compounds | eTVOC concentration | ppb |
-| Air quality index | Overall air quality | -- |
+| tVOC | eTVOC concentration | ppb |
+| AQI (TVOC) | TVOC-derived AQI (0--500) | -- |
 | Brightness | LED brightness (slider) | 0--100 |
 
 > Temperature and humidity are detected automatically by ZHA. eCO2, eTVOC, and AQI come from the custom quirk. The brightness slider uses the standard Analog Output cluster.
@@ -216,121 +216,38 @@ Use this method if you prefer Zigbee2MQTT or already have it running.
 
 ## B5 -- Add the AirCube Converter
 
+The converter file format depends on your Zigbee2MQTT version:
+- **Z2M 2.x** (2024+): Uses ES modules (`.mjs`)
+- **Z2M 1.x** (legacy): Uses CommonJS (`.js`)
+
+Both converter files are in the [`z2m/`](z2m/) folder of this repo.
+
+### Z2M 2.x (Recommended)
+
 1. Open **File editor** (install from Add-on Store if needed).
-2. Navigate to the `zigbee2mqtt` folder.
-3. Create a new file called **`aircube.js`** and paste:
-
-```javascript
-const {temperature, humidity} = require('zigbee-herdsman-converters/lib/modernExtend');
-const fz = require('zigbee-herdsman-converters/converters/fromZigbee');
-const exposes = require('zigbee-herdsman-converters/lib/exposes');
-const e = exposes.presets;
-
-const CUSTOM_CLUSTER_ID = 0xFC01;
-const ATTR_ECO2  = 0x0000;
-const ATTR_ETVOC = 0x0001;
-const ATTR_AQI   = 0x0002;
-
-const ANALOG_OUTPUT_CLUSTER = 'genAnalogOutput';
-const ATTR_PRESENT_VALUE = 0x0055;
-
-const fzAirCubeAirQuality = {
-    cluster: CUSTOM_CLUSTER_ID,
-    type: ['attributeReport', 'readResponse'],
-    convert: (model, msg, publish, options, meta) => {
-        const result = {};
-        if (msg.data.hasOwnProperty(ATTR_ECO2)) {
-            result.eco2 = msg.data[ATTR_ECO2];
-        }
-        if (msg.data.hasOwnProperty(ATTR_ETVOC)) {
-            result.voc = msg.data[ATTR_ETVOC];
-        }
-        if (msg.data.hasOwnProperty(ATTR_AQI)) {
-            result.aqi = msg.data[ATTR_AQI];
-        }
-        return result;
-    },
-};
-
-const fzAirCubeBrightness = {
-    cluster: ANALOG_OUTPUT_CLUSTER,
-    type: ['attributeReport', 'readResponse'],
-    convert: (model, msg, publish, options, meta) => {
-        if (msg.data.hasOwnProperty('presentValue')) {
-            return {brightness: Math.round(msg.data.presentValue)};
-        }
-    },
-};
-
-const tzAirCubeBrightness = {
-    key: ['brightness'],
-    convertSet: async (entity, key, value, meta) => {
-        await entity.write(ANALOG_OUTPUT_CLUSTER, {presentValue: value});
-        return {state: {brightness: value}};
-    },
-    convertGet: async (entity, key, meta) => {
-        await entity.read(ANALOG_OUTPUT_CLUSTER, ['presentValue']);
-    },
-};
-
-const definition = {
-    zigbeeModel: ['AirCube'],
-    model: 'AirCube',
-    vendor: 'StuckAtPrototype',
-    description: 'AirCube air quality monitor',
-    extend: [
-        temperature(),
-        humidity(),
-    ],
-    fromZigbee: [fzAirCubeAirQuality, fzAirCubeBrightness],
-    toZigbee: [tzAirCubeBrightness],
-    exposes: [
-        e.numeric('eco2', exposes.access.STATE)
-            .withUnit('ppm')
-            .withDescription('Equivalent CO2 concentration')
-            .withValueMin(400)
-            .withValueMax(8192),
-        e.numeric('voc', exposes.access.STATE)
-            .withUnit('ppb')
-            .withDescription('Total volatile organic compounds')
-            .withValueMin(0)
-            .withValueMax(65535),
-        e.numeric('aqi', exposes.access.STATE)
-            .withUnit('')
-            .withDescription('Air Quality Index')
-            .withValueMin(0)
-            .withValueMax(500),
-        e.numeric('brightness', exposes.access.ALL)
-            .withDescription('LED brightness')
-            .withValueMin(0)
-            .withValueMax(100),
-    ],
-    configure: async (device, coordinatorEndpoint) => {
-        const endpoint = device.getEndpoint(10);
-        await endpoint.bind('msTemperatureMeasurement', coordinatorEndpoint);
-        await endpoint.bind('msRelativeHumidity', coordinatorEndpoint);
-        await endpoint.configureReporting('msTemperatureMeasurement', [{
-            attribute: 'measuredValue', minimumReportInterval: 1,
-            maximumReportInterval: 60, reportableChange: 50,
-        }]);
-        await endpoint.configureReporting('msRelativeHumidity', [{
-            attribute: 'measuredValue', minimumReportInterval: 1,
-            maximumReportInterval: 60, reportableChange: 100,
-        }]);
-    },
-};
-
-module.exports = definition;
-```
-
+2. Navigate to the `zigbee2mqtt` folder and create an `external_converters` subfolder.
+3. Copy [`z2m/aircube.mjs`](z2m/aircube.mjs) into the `external_converters` folder.
 4. Open **`configuration.yaml`** in the `zigbee2mqtt` folder and add:
+
+   ```yaml
+   external_converters:
+     - external_converters/aircube.mjs
+   ```
+
+5. **Restart Zigbee2MQTT** from the add-on page.
+
+### Z2M 1.x (Legacy)
+
+1. Open **File editor**.
+2. Copy [`z2m/aircube.js`](z2m/aircube.js) into the `zigbee2mqtt` folder.
+3. Open **`configuration.yaml`** in the `zigbee2mqtt` folder and add:
 
    ```yaml
    external_converters:
      - aircube.js
    ```
 
-5. **Restart Zigbee2MQTT** from the add-on page.
+4. **Restart Zigbee2MQTT** from the add-on page.
 
 ## B6 -- Pair the AirCube
 
@@ -341,7 +258,7 @@ module.exports = definition;
 
 ## B7 -- Verify Sensors
 
-Go to **Settings > Devices & Services > MQTT** and click on the AirCube. You should see five sensors (Temperature, Humidity, eCO2, eTVOC, AQI) plus a Brightness control.
+Go to **Settings > Devices & Services > MQTT** and click on the AirCube. You should see six entities: Temperature, Humidity, eCO2, eTVOC, AQI (TVOC-derived), and Brightness.
 
 ---
 
@@ -355,8 +272,8 @@ Edit your dashboard, click **Add Card**, choose **Entities**, and select:
 - AirCube Temperature
 - AirCube Humidity
 - AirCube Equivalent CO2
-- AirCube Volatile organic compounds
-- AirCube Air quality index
+- AirCube tVOC
+- AirCube AQI (TVOC)
 - AirCube Brightness
 
 ### AQI Gauge
@@ -393,10 +310,11 @@ entities:
 
 ## LED Reference
 
+On firmware **1.5.0+**, the LED is a smooth hue ramp from **eCO2 and TVOC** (worst-of-two). See the **[LED Reference in README](README.md#led-reference)** for band thresholds. AQI-S is not shown on the LED and is not reported over Zigbee.
+
 | LED Behavior | Meaning |
 |-------------|---------|
-| Steady green | Good air quality (AQI 0-10) |
-| Yellow to red gradient | Degrading air quality (AQI 10-200) |
+| Green through red (smooth fade) | Air quality from excellent to unhealthy (eCO2 + TVOC) |
 | Flashing blue | Pairing mode (searching for Zigbee network) |
 | Off | Brightness set to 0 (press button to cycle) |
 
@@ -424,7 +342,8 @@ entities:
 - **ZHA (HA 2026.x):** The File editor shows the root as `/homeassistant/` instead of `/config/`. **Do not** create a new folder called `config` inside `/homeassistant/`. Place `custom_zha_quirks` directly inside `/homeassistant/`, next to `configuration.yaml`. The path in `configuration.yaml` should still say `/config/custom_zha_quirks/`.
 - **Firmware:** Make sure you are running the latest AirCube firmware from this repo. It actively sends attribute reports for the custom cluster so ZHA updates the sensors.
 - **Firmware version:** The device reports its build as the Zigbee Basic cluster **Software build ID** (`sw_build_id`, attribute `0x4000` on cluster `0x0000`, endpoint `10`). In ZHA you can read it under the device’s **Manage Zigbee device** UI. The string comes from ESP-IDF’s app version (`firmware/version.txt` at build time).
-- **Z2M:** Check that `external_converters` is in the Z2M `configuration.yaml` and `aircube.js` is in the `zigbee2mqtt` folder. Restart Zigbee2MQTT.
+- **Z2M 2.x:** Make sure you're using `aircube.mjs` (not `aircube.js`). Z2M 2.x requires ES module format. If Z2M renames the file to `aircube.mjs.invalid`, the converter has a load error — check the Z2M logs.
+- **Z2M 1.x:** Check that `external_converters` is in the Z2M `configuration.yaml` and `aircube.js` is in the `zigbee2mqtt` folder. Restart Zigbee2MQTT.
 
 ### eCO2 / eTVOC / AQI values are stuck at 0
 

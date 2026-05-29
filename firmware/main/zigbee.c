@@ -10,7 +10,7 @@
  *   - Identify (0x0003)          : Standard identify
  *   - Temperature Meas (0x0402)  : Actual temperature in 0.01 C
  *   - Humidity Meas (0x0405)     : Actual humidity in 0.01 %
- *   - Custom (0xFC01)            : eCO2, eTVOC, AQI
+ *   - Custom (0xFC01)            : eCO2, eTVOC, AQI (TVOC-derived)
  *   - Analog Output (0x000D)     : LED brightness (0-100)
  *
  * @author StuckAtPrototype, LLC
@@ -43,7 +43,7 @@ static const char *TAG = "zigbee";
 #define CUSTOM_CLUSTER_ID           0xFC01
 #define ATTR_ECO2_ID                0x0000   /* uint16 – ppm   */
 #define ATTR_ETVOC_ID               0x0001   /* uint16 – ppb   */
-#define ATTR_AQI_ID                 0x0002   /* uint16 – index */
+#define ATTR_AQI_ID                 0x0002   /* uint16 – TVOC-derived AQI (0-500)   */
 
 /* Analog Output cluster (0x000D) for brightness – standard cluster so
    ZCL Write Attributes from coordinators is handled natively by ZBOSS. */
@@ -65,6 +65,7 @@ static volatile bool s_connected  = false;
 static volatile bool s_pairing    = false;
 static volatile bool s_rejoining  = false;
 static TickType_t    s_pairing_start = 0;
+static TickType_t    s_last_join_tick = 0;       /* When we most recently joined         */
 static uint32_t      s_rejoin_backoff_ms = 0;
 static uint8_t       s_sw_build_id[SW_BUILD_ZCL_BUF_LEN];
 static uint8_t       s_init_fail_count = 0;
@@ -73,6 +74,17 @@ static uint8_t       s_init_fail_count = 0;
 #define PAIRING_TIMEOUT_MS      60000   /* Auto-cancel pairing after 60 s */
 #define REJOIN_BACKOFF_INIT_MS  1000    /* First rejoin attempt after 1 s  */
 #define REJOIN_BACKOFF_MAX_MS   300000  /* Cap backoff at 5 minutes        */
+#define STARTUP_REPORT_DELAY_MS 1000  /* Allow coordinator to finish startup */
+
+/* Flap watchdog: if we have to rejoin too many times in a short window,
+ * the radio link is unstable enough that the ZBOSS MAC layer can hit an
+ * internal assertion (mac/mac.c). Reboot proactively before that happens. */
+#define REJOIN_FLAP_WINDOW_MS   300000  /* 5-minute sliding window         */
+#define REJOIN_FLAP_LIMIT       10      /* Rejoins allowed inside window   */
+#define STABLE_UPTIME_MS        60000   /* Connected for >= this           */
+                                        /*   = considered "stable"         */
+static TickType_t s_flap_window_start  = 0;
+static uint16_t   s_flap_rejoin_count  = 0;
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 
@@ -100,6 +112,11 @@ static void init_sw_build_id(void)
     memcpy(&s_sw_build_id[1], app_desc->version, n);
 }
 
+static float current_brightness_percent(void)
+{
+    return led_get_intensity() * 100.0f;
+}
+
 static void report_attr(uint16_t cluster_id, uint16_t attr_id)
 {
     esp_zb_zcl_report_attr_cmd_t report_cmd = { 0 };
@@ -119,16 +136,47 @@ static void report_attr(uint16_t cluster_id, uint16_t attr_id)
 /* ── Forward declarations ─────────────────────────────────────────────── */
 
 static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask);
+static void report_startup_brightness_cb(uint8_t unused);
 
 /* ── Rejoin helper (exponential backoff) ──────────────────────────────── */
 
 static void schedule_rejoin(void)
 {
+    TickType_t now = xTaskGetTickCount();
+
+    /* Sliding-window flap detector. If the radio link is so bad that we
+     * keep cycling parent-link-failure -> rejoin, the ZBOSS MAC layer
+     * eventually asserts in mac/mac.c. Reboot ourselves first so we come
+     * back clean instead of crashing inside the stack. */
+    if (s_flap_rejoin_count == 0 ||
+        (now - s_flap_window_start) > pdMS_TO_TICKS(REJOIN_FLAP_WINDOW_MS)) {
+        s_flap_window_start = now;
+        s_flap_rejoin_count = 0;
+    }
+    s_flap_rejoin_count++;
+    if (s_flap_rejoin_count > REJOIN_FLAP_LIMIT) {
+        ESP_LOGE(TAG, "Rejoin flap watchdog tripped (%u rejoins in %u ms) – rebooting",
+                 (unsigned)s_flap_rejoin_count,
+                 (unsigned)REJOIN_FLAP_WINDOW_MS);
+        esp_restart();
+    }
+
     if (!s_rejoining) {
         s_rejoining = true;
-        s_rejoin_backoff_ms = REJOIN_BACKOFF_INIT_MS;
+        /* Only reset backoff if we previously had a stable connection.
+         * Otherwise keep growing it so a flapping parent doesn't make us
+         * hammer NETWORK_STEERING every second. */
+        if (s_last_join_tick != 0 &&
+            (now - s_last_join_tick) >= pdMS_TO_TICKS(STABLE_UPTIME_MS)) {
+            s_rejoin_backoff_ms = REJOIN_BACKOFF_INIT_MS;
+        } else if (s_rejoin_backoff_ms == 0) {
+            s_rejoin_backoff_ms = REJOIN_BACKOFF_INIT_MS;
+        }
     }
-    ESP_LOGW(TAG, "Scheduling rejoin in %lu ms", (unsigned long)s_rejoin_backoff_ms);
+    ESP_LOGW(TAG, "Scheduling rejoin in %lu ms (flap %u/%u)",
+             (unsigned long)s_rejoin_backoff_ms,
+             (unsigned)s_flap_rejoin_count,
+             (unsigned)REJOIN_FLAP_LIMIT);
     esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb,
                            ESP_ZB_BDB_MODE_NETWORK_STEERING, s_rejoin_backoff_ms);
     s_rejoin_backoff_ms *= 2;
@@ -168,13 +216,17 @@ static bool consume_pairing_flag(void)
 
 /* ── ZED configuration macros (matching Espressif examples) ──────────── */
 
+/* keep_alive: how often (ms) the ZED data-polls its parent.
+ * 3 s is aggressive: two missed polls and the NWK layer raises
+ * PARENT_LINK_FAILURE. On marginal RF that triggers a flap loop and
+ * eventually a MAC assertion. 7 s gives the link more headroom. */
 #define AIRCUBE_ZED_CONFIG()                                \
     {                                                       \
         .esp_zb_role = ESP_ZB_DEVICE_TYPE_ED,               \
         .install_code_policy = false,                       \
         .nwk_cfg.zed_cfg = {                                \
             .ed_timeout = ESP_ZB_ED_AGING_TIMEOUT_64MIN,    \
-            .keep_alive = 3000,                             \
+            .keep_alive = 7000,                             \
         },                                                  \
     }
 
@@ -227,9 +279,12 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                 }
             } else {
                 ESP_LOGI(TAG, "Device rebooted – already commissioned");
-                s_connected  = true;
-                s_rejoining  = false;
+                s_connected         = true;
+                s_rejoining         = false;
+                s_last_join_tick    = xTaskGetTickCount();
                 s_rejoin_backoff_ms = REJOIN_BACKOFF_INIT_MS;
+                esp_zb_scheduler_alarm((esp_zb_callback_t)report_startup_brightness_cb,
+                                       0, STARTUP_REPORT_DELAY_MS);
             }
         } else {
             s_init_fail_count++;
@@ -256,10 +311,15 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                      extended_pan_id[1], extended_pan_id[0],
                      esp_zb_get_pan_id(), esp_zb_get_current_channel(),
                      esp_zb_get_short_address());
-            s_connected  = true;
-            s_pairing    = false;
-            s_rejoining  = false;
-            s_rejoin_backoff_ms = REJOIN_BACKOFF_INIT_MS;
+            s_connected     = true;
+            s_pairing       = false;
+            s_rejoining     = false;
+            s_last_join_tick = xTaskGetTickCount();
+            /* Note: we deliberately don't reset s_rejoin_backoff_ms here.
+             * schedule_rejoin() will reset it only after we've been
+             * connected long enough to count as a stable uptime. */
+            esp_zb_scheduler_alarm((esp_zb_callback_t)report_startup_brightness_cb,
+                                   0, STARTUP_REPORT_DELAY_MS);
         } else {
             if (s_pairing &&
                 (xTaskGetTickCount() - s_pairing_start) < pdMS_TO_TICKS(PAIRING_TIMEOUT_MS)) {
@@ -310,9 +370,11 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     case ESP_ZB_BDB_SIGNAL_TC_REJOIN_DONE:
         if (err_status == ESP_OK) {
             ESP_LOGI(TAG, "Trust Center rejoin succeeded");
-            s_connected  = true;
-            s_rejoining  = false;
-            s_rejoin_backoff_ms = REJOIN_BACKOFF_INIT_MS;
+            s_connected      = true;
+            s_rejoining      = false;
+            s_last_join_tick = xTaskGetTickCount();
+            /* Backoff stays as-is; schedule_rejoin() will reset only after
+             * a stable uptime. */
         } else {
             ESP_LOGW(TAG, "Trust Center rejoin failed (%s)", esp_err_to_name(err_status));
             s_connected = false;
@@ -398,7 +460,7 @@ static esp_zb_cluster_list_t *create_cluster_list(void)
     /* ---- Analog Output cluster 0x000D (brightness, writable) ---- */
     esp_zb_analog_output_cluster_cfg_t ao_cfg = {
         .out_of_service = false,
-        .present_value  = 60.0f,
+        .present_value  = current_brightness_percent(),
         .status_flags   = 0,
     };
     esp_zb_attribute_list_t *ao_cluster =
@@ -481,7 +543,7 @@ static void configure_reporting(void)
     };
     esp_zb_zcl_update_reporting_info(&etvoc_rpt);
 
-    /* AQI: report every 60s max, or on 5-point change */
+    /* AQI (TVOC-derived): report every 60s max, or on 5-point change */
     esp_zb_zcl_reporting_info_t aqi_rpt = {
         .direction          = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
         .ep                 = AIRCUBE_ENDPOINT,
@@ -497,6 +559,24 @@ static void configure_reporting(void)
         .manuf_code         = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
     };
     esp_zb_zcl_update_reporting_info(&aqi_rpt);
+
+    /* Brightness: report every 60s max, or on 5.0% change */
+    esp_zb_zcl_reporting_info_t brightness_rpt = {
+        .direction          = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
+        .ep                 = AIRCUBE_ENDPOINT,
+        .cluster_id         = ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT,
+        .cluster_role       = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        .dst.profile_id     = ESP_ZB_AF_HA_PROFILE_ID,
+        .u.send_info.min_interval     = 1,
+        .u.send_info.max_interval     = 60,
+        .u.send_info.def_min_interval = 1,
+        .u.send_info.def_max_interval = 60,
+        .attr_id            = ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID,
+        .manuf_code         = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
+    };
+    float brightness_delta = 5.0f;
+    memcpy(&brightness_rpt.u.send_info.delta, &brightness_delta, sizeof(float));
+    esp_zb_zcl_update_reporting_info(&brightness_rpt);
 
 }
 
@@ -604,7 +684,8 @@ void zigbee_init(void)
     ESP_LOGI(TAG, "Zigbee initialized");
 }
 
-void zigbee_update_sensors(float temp_c, float humidity, int eco2, int etvoc, int aqi)
+void zigbee_update_sensors(float temp_c, float humidity, int eco2, int etvoc,
+                           int aqi)
 {
     if (!s_connected) {
         return;     /* Don't update attributes until we've joined a network */
@@ -646,7 +727,7 @@ void zigbee_update_sensors(float temp_c, float humidity, int eco2, int etvoc, in
         ATTR_AQI_ID, &zb_aqi, false);
 
     /* Sync current brightness to Analog Output cluster (covers button changes) */
-    float zb_brightness = led_get_intensity() * 100.0f;
+    float zb_brightness = current_brightness_percent();
     esp_zb_zcl_set_attribute_val(AIRCUBE_ENDPOINT,
         ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
         ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID, &zb_brightness, false);
@@ -666,6 +747,40 @@ void zigbee_update_sensors(float temp_c, float humidity, int eco2, int etvoc, in
 bool zigbee_is_connected(void)
 {
     return s_connected;
+}
+
+static void report_startup_brightness_cb(uint8_t unused)
+{
+    (void)unused;
+
+    if (!s_connected) {
+        return;
+    }
+
+    float zb_brightness = current_brightness_percent();
+    esp_zb_zcl_set_attribute_val(AIRCUBE_ENDPOINT,
+        ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID, &zb_brightness, false);
+    report_attr(ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT,
+                ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID);
+}
+
+void zigbee_report_brightness(void)
+{
+    if (!s_connected) {
+        return;
+    }
+    float zb_brightness = current_brightness_percent();
+    if (!esp_zb_lock_acquire(pdMS_TO_TICKS(2000))) {
+        ESP_LOGW(TAG, "Zigbee lock timeout in report_brightness – skipping");
+        return;
+    }
+    esp_zb_zcl_set_attribute_val(AIRCUBE_ENDPOINT,
+        ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID, &zb_brightness, false);
+    report_attr(ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT,
+                ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID);
+    esp_zb_lock_release();
 }
 
 void zigbee_start_pairing(void)
