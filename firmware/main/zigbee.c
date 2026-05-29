@@ -2,8 +2,9 @@
  * @file zigbee.c
  * @brief Zigbee integration for AirCube
  *
- * Implements a Zigbee End Device that exposes environmental sensor data
- * via standard and custom ZCL clusters.
+ * Implements a Zigbee Router that exposes environmental sensor data
+ * via standard and custom ZCL clusters, and relays messages for other
+ * Zigbee devices on the network.
  *
  * Clusters on Endpoint 10:
  *   - Basic (0x0000)             : Device identity, SWBuildID (firmware version)
@@ -30,10 +31,27 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_zigbee_core.h"
+#include "nwk/esp_zigbee_nwk.h"
 #include "ha/esp_zigbee_ha_standard.h"
 #include "zcl/esp_zigbee_zcl_command.h"
 
 static const char *TAG = "zigbee";
+
+static const char *role_to_str(esp_zb_nwk_device_type_t role)
+{
+    switch (role) {
+    case ESP_ZB_DEVICE_TYPE_COORDINATOR:
+        return "coordinator";
+    case ESP_ZB_DEVICE_TYPE_ROUTER:
+        return "router";
+    case ESP_ZB_DEVICE_TYPE_ED:
+        return "end-device";
+    case ESP_ZB_DEVICE_TYPE_NONE:
+        return "none";
+    default:
+        return "unknown";
+    }
+}
 
 /* ── Endpoint & cluster configuration ────────────────────────────────── */
 
@@ -64,6 +82,7 @@ static const char *TAG = "zigbee";
 static volatile bool s_connected  = false;
 static volatile bool s_pairing    = false;
 static volatile bool s_rejoining  = false;
+static volatile bool s_post_join_diag_done = false;
 static TickType_t    s_pairing_start = 0;
 static TickType_t    s_last_join_tick = 0;       /* When we most recently joined         */
 static uint32_t      s_rejoin_backoff_ms = 0;
@@ -137,6 +156,7 @@ static void report_attr(uint16_t cluster_id, uint16_t attr_id)
 
 static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask);
 static void report_startup_brightness_cb(uint8_t unused);
+static void post_join_diag_cb(uint8_t unused);
 
 /* ── Rejoin helper (exponential backoff) ──────────────────────────────── */
 
@@ -214,19 +234,14 @@ static bool consume_pairing_flag(void)
     return found;
 }
 
-/* ── ZED configuration macros (matching Espressif examples) ──────────── */
+/* ── Router configuration macros (matching Espressif examples) ───────── */
 
-/* keep_alive: how often (ms) the ZED data-polls its parent.
- * 3 s is aggressive: two missed polls and the NWK layer raises
- * PARENT_LINK_FAILURE. On marginal RF that triggers a flap loop and
- * eventually a MAC assertion. 7 s gives the link more headroom. */
-#define AIRCUBE_ZED_CONFIG()                                \
+#define AIRCUBE_ZR_CONFIG()                                 \
     {                                                       \
-        .esp_zb_role = ESP_ZB_DEVICE_TYPE_ED,               \
+        .esp_zb_role = ESP_ZB_DEVICE_TYPE_ROUTER,           \
         .install_code_policy = false,                       \
-        .nwk_cfg.zed_cfg = {                                \
-            .ed_timeout = ESP_ZB_ED_AGING_TIMEOUT_64MIN,    \
-            .keep_alive = 7000,                             \
+        .nwk_cfg.zczr_cfg = {                               \
+            .max_children = 10,                             \
         },                                                  \
     }
 
@@ -246,6 +261,41 @@ static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
 {
     ESP_RETURN_ON_FALSE(esp_zb_bdb_start_top_level_commissioning(mode_mask) == ESP_OK, ,
                         TAG, "Failed to start Zigbee commissioning");
+}
+
+static void post_join_diag_cb(uint8_t unused)
+{
+    (void)unused;
+
+    if (s_post_join_diag_done) {
+        return;
+    }
+    s_post_join_diag_done = true;
+
+    ESP_LOGI(TAG, "Post-join diag: role=%s rx_on_when_idle=%d max_children=%u",
+             role_to_str(esp_zb_get_network_device_role()),
+             esp_zb_get_rx_on_when_idle(),
+             esp_zb_nwk_get_max_children());
+
+    esp_zb_nwk_info_iterator_t it = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+    esp_zb_nwk_neighbor_info_t nbr;
+    int count = 0;
+    while (esp_zb_nwk_get_next_neighbor(&it, &nbr) == ESP_OK) {
+        count++;
+        ESP_LOGI(TAG,
+                 "Neighbor[%d]: short=0x%04x type=%u rel=%u rx_idle=%u depth=%u lqi=%u rssi=%d ieee=%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
+                 count,
+                 nbr.short_addr,
+                 nbr.device_type,
+                 nbr.relationship,
+                 nbr.rx_on_when_idle,
+                 nbr.depth,
+                 nbr.lqi,
+                 nbr.rssi,
+                 nbr.ieee_addr[7], nbr.ieee_addr[6], nbr.ieee_addr[5], nbr.ieee_addr[4],
+                 nbr.ieee_addr[3], nbr.ieee_addr[2], nbr.ieee_addr[1], nbr.ieee_addr[0]);
+    }
+    ESP_LOGI(TAG, "Post-join diag: neighbor_count=%d", count);
 }
 
 /* ── Signal handler (called by the Zigbee stack) ─────────────────────── */
@@ -320,6 +370,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
              * connected long enough to count as a stable uptime. */
             esp_zb_scheduler_alarm((esp_zb_callback_t)report_startup_brightness_cb,
                                    0, STARTUP_REPORT_DELAY_MS);
+            s_post_join_diag_done = false;
+            esp_zb_scheduler_alarm((esp_zb_callback_t)post_join_diag_cb, 0, 2000);
         } else {
             if (s_pairing &&
                 (xTaskGetTickCount() - s_pairing_start) < pdMS_TO_TICKS(PAIRING_TIMEOUT_MS)) {
@@ -345,6 +397,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         uint8_t leave_type = leave_params ? leave_params->leave_type : 0xFF;
         ESP_LOGW(TAG, "Left network (leave_type: 0x%x)", leave_type);
         s_connected = false;
+        s_post_join_diag_done = false;
         if (!s_pairing) {
             schedule_rejoin();
         }
@@ -630,9 +683,18 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
 
 static void esp_zb_task(void *pvParameters)
 {
-    /* Initialize Zigbee stack as End Device */
-    esp_zb_cfg_t zb_nwk_cfg = AIRCUBE_ZED_CONFIG();
+    /* Initialize Zigbee stack as Router */
+    esp_zb_cfg_t zb_nwk_cfg = AIRCUBE_ZR_CONFIG();
     esp_zb_init(&zb_nwk_cfg);
+
+    /* Enforce router runtime behavior explicitly for unambiguous node descriptor. */
+    ESP_ERROR_CHECK(esp_zb_set_network_device_role(ESP_ZB_DEVICE_TYPE_ROUTER));
+    esp_zb_set_rx_on_when_idle(true);
+    ESP_ERROR_CHECK(esp_zb_nwk_set_max_children(10));
+    ESP_LOGI(TAG, "Runtime Zigbee role: %s, rx_on_when_idle=%d, max_children=%u",
+             role_to_str(esp_zb_get_network_device_role()),
+             esp_zb_get_rx_on_when_idle(),
+             esp_zb_nwk_get_max_children());
 
     /* Create endpoint 10 with all our clusters */
     esp_zb_ep_list_t *ep_list = esp_zb_ep_list_create();

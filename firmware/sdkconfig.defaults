@@ -19,8 +19,8 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions_zigbee.csv"
 # Zigbee (required by firmware/main/zigbee.c)
 #
 CONFIG_ZB_ENABLED=y
-# CONFIG_ZB_ZCZR is not set
-CONFIG_ZB_ZED=y
+CONFIG_ZB_ZCZR=y
+# CONFIG_ZB_ZED is not set
 # CONFIG_ZB_ZGPD is not set
 CONFIG_ZB_RADIO_NATIVE=y
 # CONFIG_ZB_RADIO_SPINEL_UART is not set
