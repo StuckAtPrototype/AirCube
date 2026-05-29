@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:v5.3.1
+      image: espressif/idf:v5.5.2
     steps:
       - name: Checkout
         uses: actions/checkout@v4
