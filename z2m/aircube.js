@@ -9,21 +9,16 @@
  *   external_converters:
  *     - aircube.js
  *
- * Standard clusters (auto-handled by Z2M):
- *   - Temperature Measurement (0x0402)
- *   - Relative Humidity (0x0405)
- *
- * Custom cluster 0xFC01 attributes (read-only sensors):
- *   0x0000 = eCO2       (uint16, ppm)
- *   0x0001 = eTVOC      (uint16, ppb)
- *   0x0002 = AQI        (uint16, index)
+ * Custom cluster 0xFC01 attributes (matches zha/aircube.py):
+ *   0x0000 = eco2  (uint16, ppm)
+ *   0x0001 = etvoc (uint16, ppb)
+ *   0x0002 = aqi   (uint16, TVOC-derived AQI, 0-500)
  *
  * Analog Output cluster 0x000D (writable):
- *   0x0055 = presentValue (float, 0-100 brightness)
+ *   presentValue (float, 0-100 brightness)
  */
 
 const {temperature, humidity} = require('zigbee-herdsman-converters/lib/modernExtend');
-const fz = require('zigbee-herdsman-converters/converters/fromZigbee');
 const exposes = require('zigbee-herdsman-converters/lib/exposes');
 const e = exposes.presets;
 
@@ -33,7 +28,6 @@ const ATTR_ETVOC = 0x0001;
 const ATTR_AQI   = 0x0002;
 
 const ANALOG_OUTPUT_CLUSTER = 'genAnalogOutput';
-const ATTR_PRESENT_VALUE = 0x0055;
 
 const fzAirCubeAirQuality = {
     cluster: CUSTOM_CLUSTER_ID,
@@ -88,21 +82,21 @@ const definition = {
     exposes: [
         e.numeric('eco2', exposes.access.STATE)
             .withUnit('ppm')
-            .withDescription('Equivalent CO2 concentration')
+            .withDescription('Equivalent CO2')
             .withValueMin(400)
             .withValueMax(8192),
         e.numeric('voc', exposes.access.STATE)
             .withUnit('ppb')
-            .withDescription('Total volatile organic compounds')
+            .withDescription('tVOC')
             .withValueMin(0)
             .withValueMax(65535),
         e.numeric('aqi', exposes.access.STATE)
             .withUnit('')
-            .withDescription('Air Quality Index')
+            .withDescription('AQI (TVOC)')
             .withValueMin(0)
             .withValueMax(500),
         e.numeric('brightness', exposes.access.ALL)
-            .withDescription('LED brightness')
+            .withDescription('Brightness')
             .withValueMin(0)
             .withValueMax(100),
     ],
@@ -117,6 +111,11 @@ const definition = {
         await endpoint.configureReporting('msRelativeHumidity', [{
             attribute: 'measuredValue', minimumReportInterval: 1,
             maximumReportInterval: 60, reportableChange: 100,
+        }]);
+        await endpoint.bind('genAnalogOutput', coordinatorEndpoint);
+        await endpoint.configureReporting('genAnalogOutput', [{
+            attribute: 'presentValue', minimumReportInterval: 1,
+            maximumReportInterval: 60, reportableChange: 5,
         }]);
     },
 };

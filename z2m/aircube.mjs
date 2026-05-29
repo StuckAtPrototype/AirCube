@@ -9,14 +9,10 @@
  *   external_converters:
  *     - external_converters/aircube.mjs
  *
- * Standard clusters (auto-handled by Z2M):
- *   - Temperature Measurement (0x0402)
- *   - Relative Humidity (0x0405)
- *
- * Custom cluster 0xFC01 attributes:
- *   0x0000 = eCO2  (uint16, ppm)
- *   0x0001 = eTVOC (uint16, ppb)
- *   0x0002 = AQI   (uint16, index)
+ * Custom cluster 0xFC01 attributes (matches zha/aircube.py):
+ *   0x0000 = eco2  (uint16, ppm)
+ *   0x0001 = etvoc (uint16, ppb)
+ *   0x0002 = aqi   (uint16, TVOC-derived AQI, 0-500)
  */
 
 import {temperature, humidity} from 'zigbee-herdsman-converters/lib/modernExtend';
@@ -49,6 +45,28 @@ const fzAirCubeAirQuality = {
     },
 };
 
+const fzBrightness = {
+    cluster: 'genAnalogOutput',
+    type: ['attributeReport', 'readResponse'],
+    convert: (model, msg, publish, options, meta) => {
+        if (msg.data.hasOwnProperty('presentValue')) {
+            return { brightness: Math.round(msg.data['presentValue']) };
+        }
+    },
+};
+
+const tzBrightness = {
+    key: ['brightness'],
+    convertSet: async (entity, key, value, meta) => {
+        const clamped = Math.min(100, Math.max(0, value));
+        await entity.write('genAnalogOutput', { presentValue: clamped });
+        return { state: { brightness: clamped } };
+    },
+    convertGet: async (entity, key, meta) => {
+        await entity.read('genAnalogOutput', ['presentValue']);
+    },
+};
+
 const definition = {
     zigbeeModel: ['AirCube'],
     model: 'AirCube',
@@ -58,31 +76,34 @@ const definition = {
         temperature(),
         humidity(),
     ],
-    fromZigbee: [fzAirCubeAirQuality],
-    toZigbee: [],
+    fromZigbee: [fzAirCubeAirQuality, fzBrightness],
+    toZigbee: [tzBrightness],
     exposes: [
         e.numeric('eco2', exposes.access.STATE)
             .withUnit('ppm')
-            .withDescription('Equivalent carbon dioxide concentration')
+            .withDescription('Equivalent CO2')
             .withValueMin(400)
             .withValueMax(8192),
         e.numeric('voc', exposes.access.STATE)
             .withUnit('ppb')
-            .withDescription('Total volatile organic compounds')
+            .withDescription('tVOC')
             .withValueMin(0)
             .withValueMax(65535),
         e.numeric('aqi', exposes.access.STATE)
             .withUnit('')
-            .withDescription('Air Quality Index')
+            .withDescription('AQI (TVOC)')
             .withValueMin(0)
             .withValueMax(500),
+        e.numeric('brightness', exposes.access.ALL)
+            .withUnit('%')
+            .withDescription('Brightness')
+            .withValueMin(0)
+            .withValueMax(100),
     ],
     configure: async (device, coordinatorEndpoint) => {
         const endpoint = device.getEndpoint(10);
-        /* Bind standard clusters */
         await endpoint.bind('msTemperatureMeasurement', coordinatorEndpoint);
         await endpoint.bind('msRelativeHumidity', coordinatorEndpoint);
-        /* Configure reporting for standard clusters */
         await endpoint.configureReporting('msTemperatureMeasurement', [{
             attribute: 'measuredValue', minimumReportInterval: 1,
             maximumReportInterval: 60, reportableChange: 50,
@@ -90,6 +111,11 @@ const definition = {
         await endpoint.configureReporting('msRelativeHumidity', [{
             attribute: 'measuredValue', minimumReportInterval: 1,
             maximumReportInterval: 60, reportableChange: 100,
+        }]);
+        await endpoint.bind('genAnalogOutput', coordinatorEndpoint);
+        await endpoint.configureReporting('genAnalogOutput', [{
+            attribute: 'presentValue', minimumReportInterval: 1,
+            maximumReportInterval: 60, reportableChange: 5,
         }]);
     },
 };

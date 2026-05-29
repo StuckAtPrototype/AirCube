@@ -59,7 +59,8 @@ void serial_protocol_init(void)
 }
 
 void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float humidity,
-                             const char* ens16x_status_str, int etvoc, int eco2, int aqi, int aqi_uba)
+                             const char* ens16x_status_str, int etvoc, int eco2,
+                             int aqi, int aqi_s, int aqi_uba)
 {
     char json_buffer[JSON_OUTPUT_BUF_SIZE];
     
@@ -69,13 +70,16 @@ void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float h
     // Convert Celsius to Fahrenheit
     float temperature_f = temperature_c * 9.0f / 5.0f + 32.0f;
     
-    // Format JSON output
+    // Format JSON output. Note: "aqi" is the canonical AirCube AQI
+    // (TVOC-derived, 0-500) starting in firmware 1.5.0. The previous AQI-S
+    // value moved to "aqi_s" - this is a breaking change for any consumer
+    // that was reading "aqi" as AQI-S in older firmware.
     int len = snprintf(json_buffer, sizeof(json_buffer),
         "{\"ens210\":{\"status\":%u,\"temperature_c\":%.2f,\"temperature_f\":%.2f,\"humidity\":%.2f},"
-        "\"ens16x\":{\"status\":\"%s\",\"etvoc\":%d,\"eco2\":%d,\"aqi\":%d,\"aqi_uba\":%d},"
+        "\"ens16x\":{\"status\":\"%s\",\"etvoc\":%d,\"eco2\":%d,\"aqi\":%d,\"aqi_s\":%d,\"aqi_uba\":%d},"
         "\"timestamp\":%lu}\n",
         ens210_status, temperature_c, temperature_f, humidity,
-        ens16x_status_str, etvoc, eco2, aqi, aqi_uba,
+        ens16x_status_str, etvoc, eco2, aqi, aqi_s, aqi_uba,
         (unsigned long)timestamp);
     
     if (len > 0 && len < sizeof(json_buffer)) {
