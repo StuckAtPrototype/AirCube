@@ -21,6 +21,13 @@ import time
 import serial
 import paho.mqtt.client as mqtt
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------------------
 # Configuration — override with environment variables
 # ---------------------------------------------------------------------------
@@ -33,6 +40,7 @@ MQTT_PASS = os.getenv("MQTT_PASS", "")
 DEVICE_NAME = os.getenv("AIRCUBE_NAME", "AirCube")
 DEVICE_ID = os.getenv("AIRCUBE_ID", "aircube_1")  # unique per device
 DISCOVERY_PREFIX = os.getenv("HA_DISCOVERY_PREFIX", "homeassistant")
+PUBLISH_INTERVAL = int(os.getenv("AIRCUBE_INTERVAL", "0"))
 
 STATE_TOPIC = f"aircube/{DEVICE_ID}/state"
 AVAIL_TOPIC = f"aircube/{DEVICE_ID}/availability"
@@ -169,10 +177,17 @@ def main() -> None:
     parser.add_argument(
         "--no-mqtt", action="store_true", help="Don't connect to MQTT, just print data"
     )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=PUBLISH_INTERVAL,
+        help=f"Publish interval in seconds. Set to 0 to publish every packet immediately. (default: {PUBLISH_INTERVAL})",
+    )
     args = parser.parse_args()
 
     log.info("Starting AirCube MQTT bridge (device_id=%s)", DEVICE_ID)
     log.info("Serial: %s", SERIAL_PORT)
+    log.info("Interval: %s seconds", args.interval)
 
     client = None
     if not args.no_mqtt:
@@ -205,13 +220,22 @@ def main() -> None:
                 log.debug("Skipping non-sensor line: %s", raw.strip())
                 continue
 
+            if args.interval <= 0:
+                # Publish immediately
+                if client:
+                    client.publish(STATE_TOPIC, json.dumps(payload))
+                    log.info("Published data: %s", payload)
+                else:
+                    print(f"WOULD PUBLISH data to {STATE_TOPIC}: {json.dumps(payload)}")
+                continue
+
             # Add values to buffer
             for key, val in payload.items():
                 if val is not None:
                     buffer[key].append(val)
 
             current_time = time.time()
-            if current_time - last_publish_time >= 10:
+            if current_time - last_publish_time >= args.interval:
                 if buffer:
                     # Calculate averages
                     avg_payload = {}
