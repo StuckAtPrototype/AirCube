@@ -35,8 +35,7 @@ class MetricCard(QFrame):
         row = QHBoxLayout()
         row.setSpacing(6)
         self.value_label = QLabel("--.-")
-        self.value_label.setFont(ui_font(24, QFont.Weight.DemiBold))
-        self.value_label.setStyleSheet("font-variant-numeric: tabular-nums;")
+        self.value_label.setFont(ui_font(24, QFont.Weight.DemiBold, tabular=True))
         row.addWidget(self.value_label, alignment=Qt.AlignmentFlag.AlignBottom)
 
         self.unit_label = QLabel("")
@@ -59,9 +58,7 @@ class MetricCard(QFrame):
         self.unit_label.setText(unit_text)
 
     def set_value_color(self, color):
-        self.value_label.setStyleSheet(
-            f"color: {color}; font-variant-numeric: tabular-nums;"
-        )
+        self.value_label.setStyleSheet(f"color: {color};")
 
     def set_pill(self, text, color):
         self.pill_label.setText(text)
@@ -86,7 +83,7 @@ class MetricCard(QFrame):
         self.unit_label.setStyleSheet(f"color: {p.text_secondary};")
         if not self.value_label.styleSheet().startswith("color"):
             self.value_label.setStyleSheet(
-                f"color: {p.text_primary}; font-variant-numeric: tabular-nums;"
+                f"color: {p.text_primary};"
             )
 
 

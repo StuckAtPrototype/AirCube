@@ -132,11 +132,21 @@ def format_temperature(temp_c, unit):
     return f"{temp_c:.1f}", "°C"
 
 
-def ui_font(size=10, weight=QFont.Weight.Normal):
-    """Return the platform's default UI font at the given size/weight."""
+def ui_font(size=10, weight=QFont.Weight.Normal, tabular=False):
+    """Return the platform's default UI font at the given size/weight.
+
+    When tabular=True, enable tabular (monospaced) figures so updating
+    numbers don't shift width. Uses the Qt >= 6.7 font-feature API and
+    degrades gracefully on older PyQt6.
+    """
     family = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
     font = QFont(family, size)
     font.setWeight(weight)
+    if tabular:
+        try:
+            font.setFeature(QFont.Tag("tnum"), 1)
+        except (AttributeError, TypeError):
+            pass
     return font
 
 
