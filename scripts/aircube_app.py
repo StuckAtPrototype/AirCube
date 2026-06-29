@@ -130,7 +130,9 @@ class AirCubeApp(QMainWindow):
         conn_layout.addWidget(self.csv_checkbox)
 
         self.csv_path_label = QLabel("No file selected")
-        self.csv_path_label.setStyleSheet("color: #666; font-style: italic;")
+        self.csv_path_label.setStyleSheet(
+            f"color: {self._palette.text_muted}; font-style: italic;"
+        )
         conn_layout.addWidget(self.csv_path_label)
 
         self.csv_browse_btn = QPushButton("Browse...")
@@ -352,7 +354,7 @@ class AirCubeApp(QMainWindow):
         if path:
             self.csv_path = path
             self.csv_path_label.setText(os.path.basename(path))
-            self.csv_path_label.setStyleSheet("color: #333;")
+            self.csv_path_label.setStyleSheet(f"color: {self._palette.text_secondary};")
 
     def start_csv_logging(self):
         """Start logging to CSV file."""
@@ -368,7 +370,7 @@ class AirCubeApp(QMainWindow):
             self.csv_file.flush()
 
         self.csv_status.setText(f"Logging to {os.path.basename(self.csv_path)}")
-        self.csv_status.setStyleSheet("color: #2e7d32;")
+        self.csv_status.setStyleSheet(f"color: {self._palette.success};")
 
     def stop_csv_logging(self):
         """Stop logging to CSV file."""
@@ -402,6 +404,16 @@ class AirCubeApp(QMainWindow):
             self.connection_status.setStyleSheet(
                 f"color: {self._palette.danger}; font-weight: 600;"
             )
+
+        # Re-theme the CSV labels for the active palette.
+        if self.csv_path:
+            self.csv_path_label.setStyleSheet(f"color: {self._palette.text_secondary};")
+        else:
+            self.csv_path_label.setStyleSheet(
+                f"color: {self._palette.text_muted}; font-style: italic;"
+            )
+        if self.csv_writer:
+            self.csv_status.setStyleSheet(f"color: {self._palette.success};")
 
     def apply_unit(self, unit):
         """Apply and persist a temperature display unit (Celsius/Fahrenheit)."""

@@ -51,6 +51,10 @@ class MetricCard(QFrame):
         body.addLayout(row)
         outer.addLayout(body)
 
+        self._palette = LIGHT
+        # True once a metric-specific value color (e.g. VOC band) is set, so
+        # theme switches don't overwrite it. Plain values follow the theme.
+        self._value_color_overridden = False
         self.apply_palette(LIGHT, accent)
 
     def set_value(self, value_text, unit_text):
@@ -58,7 +62,13 @@ class MetricCard(QFrame):
         self.unit_label.setText(unit_text)
 
     def set_value_color(self, color):
+        self._value_color_overridden = True
         self.value_label.setStyleSheet(f"color: {color};")
+
+    def reset_value_color(self):
+        """Clear a metric-specific value color so the value follows the theme."""
+        self._value_color_overridden = False
+        self.value_label.setStyleSheet(f"color: {self._palette.text_primary};")
 
     def set_pill(self, text, color):
         self.pill_label.setText(text)
@@ -70,6 +80,7 @@ class MetricCard(QFrame):
     def apply_palette(self, palette, accent=None):
         if accent is not None:
             self.accent = accent
+        self._palette = palette
         p = palette
         self.setStyleSheet(
             f"#metricCard {{ background-color: {p.surface};"
@@ -81,10 +92,8 @@ class MetricCard(QFrame):
         )
         self.title_label.setStyleSheet(f"color: {p.text_secondary};")
         self.unit_label.setStyleSheet(f"color: {p.text_secondary};")
-        if not self.value_label.styleSheet().startswith("color"):
-            self.value_label.setStyleSheet(
-                f"color: {p.text_primary};"
-            )
+        if not self._value_color_overridden:
+            self.value_label.setStyleSheet(f"color: {p.text_primary};")
 
 
 class SensorDisplay(QWidget):
@@ -140,7 +149,7 @@ class SensorDisplay(QWidget):
         )
         self.cards["humidity"].set_value("--.-", "%")
         self.cards["voc"].set_value("---", "")
-        self.cards["voc"].set_value_color(self._palette.text_primary)
+        self.cards["voc"].reset_value_color()
         self.cards["voc"].pill_label.setText("")
         self.cards["voc"].pill_label.setStyleSheet("")
         self.cards["eco2"].set_value("----", "ppm")
