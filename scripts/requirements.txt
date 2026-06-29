@@ -5,3 +5,6 @@ PyQt6>=6.4
 
 # Build dependencies (for creating standalone executable)
 # pyinstaller>=6.0
+
+# Test dependencies (optional)
+# pytest>=7.0
