@@ -150,7 +150,7 @@ def ui_font(size=10, weight=QFont.Weight.Normal, tabular=False):
     return font
 
 
-def accent_button_qss(bg, hover):
+def accent_button_qss(bg, hover, disabled):
     """QSS for a solid colored action button (Connect/Disconnect)."""
     return f"""
         QPushButton {{
@@ -162,7 +162,7 @@ def accent_button_qss(bg, hover):
             font-weight: 600;
         }}
         QPushButton:hover {{ background-color: {hover}; }}
-        QPushButton:disabled {{ background-color: #9aa3ad; }}
+        QPushButton:disabled {{ background-color: {disabled}; }}
     """
 
 

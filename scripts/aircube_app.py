@@ -215,7 +215,7 @@ class AirCubeApp(QMainWindow):
 
         self.connect_btn.setText("Disconnect")
         self.connect_btn.setStyleSheet(
-            accent_button_qss(self._palette.danger, self._palette.danger_hover)
+            accent_button_qss(self._palette.danger, self._palette.danger_hover, self._palette.text_muted)
         )
         self.port_combo.setEnabled(False)
         self.refresh_btn.setEnabled(False)
@@ -239,7 +239,7 @@ class AirCubeApp(QMainWindow):
 
         self.connect_btn.setText("Connect")
         self.connect_btn.setStyleSheet(
-            accent_button_qss(self._palette.start, self._palette.start_hover)
+            accent_button_qss(self._palette.start, self._palette.start_hover, self._palette.text_muted)
         )
         self.port_combo.setEnabled(True)
         self.refresh_btn.setEnabled(True)
@@ -392,14 +392,14 @@ class AirCubeApp(QMainWindow):
         connected = bool(self.serial_thread and self.serial_thread.running)
         if connected:
             self.connect_btn.setStyleSheet(
-                accent_button_qss(self._palette.danger, self._palette.danger_hover)
+                accent_button_qss(self._palette.danger, self._palette.danger_hover, self._palette.text_muted)
             )
             self.connection_status.setStyleSheet(
                 f"color: {self._palette.success}; font-weight: 600;"
             )
         else:
             self.connect_btn.setStyleSheet(
-                accent_button_qss(self._palette.start, self._palette.start_hover)
+                accent_button_qss(self._palette.start, self._palette.start_hover, self._palette.text_muted)
             )
             self.connection_status.setStyleSheet(
                 f"color: {self._palette.danger}; font-weight: 600;"
