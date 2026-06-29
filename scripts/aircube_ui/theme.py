@@ -170,8 +170,11 @@ def build_stylesheet(palette):
     """Build the global application stylesheet for the given palette."""
     p = palette
     return f"""
-        QMainWindow, QWidget {{
+        QMainWindow {{
             background-color: {p.window_bg};
+            color: {p.text_primary};
+        }}
+        QWidget {{
             color: {p.text_primary};
         }}
         QMenuBar {{ background-color: {p.surface}; color: {p.text_primary}; }}
@@ -193,7 +196,7 @@ def build_stylesheet(palette):
             padding: 0 6px;
             color: {p.text_secondary};
         }}
-        QLabel {{ color: {p.text_primary}; }}
+        QLabel {{ color: {p.text_primary}; background: transparent; }}
         QPushButton {{
             background-color: {p.surface_alt};
             color: {p.text_primary};
