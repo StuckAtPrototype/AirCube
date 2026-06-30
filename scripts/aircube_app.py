@@ -43,9 +43,11 @@ class AirCubeApp(QMainWindow):
         self.setWindowTitle(f"{__app_name__} v{__version__} - Air Quality Monitor")
         self.setMinimumSize(900, 700)
 
-        # Appearance and unit settings (persisted via QSettings)
+        # Appearance and unit settings (persisted via QSettings).
+        # Default to Light to preserve the original out-of-box look; System
+        # (follow the OS) and Dark are opt-in via View > Appearance.
         self.settings = QSettings("StuckAtPrototype", "AirCube")
-        self.mode = Mode(self.settings.value("appearance", Mode.SYSTEM.value))
+        self.mode = Mode(self.settings.value("appearance", Mode.LIGHT.value))
         self.unit = Unit(self.settings.value("unit", Unit.CELSIUS.value))
         self._palette = LIGHT
 
