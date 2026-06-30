@@ -261,7 +261,7 @@ pip install -r requirements.txt
 
 ### aircube_app.py -- Full desktop GUI
 
-Live sensor display, color-coded VOC Level, three-panel charts (temp/humidity, VOC Level, gas levels), optional CSV logging, configurable history depth (50--1000 points).
+Live sensor display, color-coded VOC Level, three-panel charts (temp/humidity, VOC Level, gas levels), optional CSV logging, configurable history depth (50--1000 points), a light/dark theme (View > Appearance: System, Light, or Dark), and a Celsius/Fahrenheit toggle (View > Units).
 
 ```bash
 python aircube_app.py
