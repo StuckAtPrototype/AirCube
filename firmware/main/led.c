@@ -23,7 +23,10 @@ static SemaphoreHandle_t led_mutex = NULL;
 
 // Global LED color and intensity variables (GRB format for WS2812 LEDs)
 static uint32_t led_color = LED_COLOR_OFF;      // Current LED color
-static float led_intensity = 0.6f;              // Current LED intensity (0.0 to 1.0)
+// Start at 0 so the LEDs stay dark until button_init() loads the saved
+// brightness from NVS - otherwise every boot flashes the startup color even
+// when the user has set brightness to off.
+static float led_intensity = 0.0f;              // Current LED intensity (0.0 to 1.0)
 
 // LED state structure for WS2812 driver
 static struct led_state led_new_state = {0};

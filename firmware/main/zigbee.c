@@ -287,16 +287,37 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                                        0, STARTUP_REPORT_DELAY_MS);
             }
         } else {
-            s_init_fail_count++;
-            if (s_init_fail_count >= INIT_FAIL_MAX) {
-                ESP_LOGE(TAG, "Zigbee init failed %d times – rebooting to reset radio",
+            if (s_init_fail_count < 250) {
+                s_init_fail_count++;
+            }
+            /* A commissioned device whose coordinator is unreachable
+             * (powered off, out of range, network gone) fails init forever.
+             * Reboot at most once to clear a genuinely wedged radio - if we
+             * already rebooted for this (ESP_RST_SW) it didn't help, so keep
+             * retrying with exponential backoff instead of boot-looping,
+             * which flashes the LED on every restart. */
+            if (s_init_fail_count == INIT_FAIL_MAX &&
+                esp_reset_reason() != ESP_RST_SW) {
+                ESP_LOGE(TAG, "Zigbee init failed %d times – rebooting once to reset radio",
                          s_init_fail_count);
                 esp_restart();
             }
-            ESP_LOGI(TAG, "Waiting for coordinator (%s), attempt %d/%d, retrying",
-                     esp_err_to_name(err_status), s_init_fail_count, INIT_FAIL_MAX);
+            uint32_t delay_ms = REJOIN_BACKOFF_INIT_MS;
+            if (s_init_fail_count > INIT_FAIL_MAX) {
+                uint8_t doublings = s_init_fail_count - INIT_FAIL_MAX;
+                if (doublings > 9) {
+                    doublings = 9;
+                }
+                delay_ms <<= doublings;
+                if (delay_ms > REJOIN_BACKOFF_MAX_MS) {
+                    delay_ms = REJOIN_BACKOFF_MAX_MS;
+                }
+            }
+            ESP_LOGI(TAG, "Waiting for coordinator (%s), attempt %d, retrying in %lu ms",
+                     esp_err_to_name(err_status), s_init_fail_count,
+                     (unsigned long)delay_ms);
             esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb,
-                                   ESP_ZB_BDB_MODE_INITIALIZATION, 1000);
+                                   ESP_ZB_BDB_MODE_INITIALIZATION, delay_ms);
         }
         break;
 
