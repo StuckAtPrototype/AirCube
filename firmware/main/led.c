@@ -39,50 +39,70 @@ static struct led_state led_new_state = {0};
  */
 static void led_task(void *pvParameters)
 {
+    // Rewriting an unchanged frame 50x/s keeps the WS2812 data line busy at all
+    // times, so a frame corrupted by a coincident radio TX burst (Zigbee + BLE
+    // push every 10 s) briefly latches a random color - visible as a blink even
+    // when the LEDs are set to off. Only write when the frame changes; after a
+    // change, repeat the frame briefly so a corrupted transition write self-heals;
+    // when lit, refresh slowly as a safety net; when off, keep the line idle.
+    uint32_t last_written_color = 0xFFFFFFFF;   // Sentinel: force first write
+    TickType_t last_write_ticks = 0;
+    TickType_t last_change_ticks = 0;
+
     while (1) {
+        bool have_color = false;
+        uint32_t current_color = LED_COLOR_OFF;
+        float current_intensity = 0.0f;
+
         // Take mutex to safely read LED color and intensity
         if (led_mutex != NULL && xSemaphoreTake(led_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
             // Read current LED color and intensity safely
-            uint32_t current_color = led_color;
-            float current_intensity = led_intensity;
+            current_color = led_color;
+            current_intensity = led_intensity;
             xSemaphoreGive(led_mutex);
-            
+            have_color = true;
+        } else if (led_mutex == NULL) {
+            // Fallback mode if mutex is not available
+            ESP_LOGW("led", "LED mutex not available, using direct access");
+            current_color = led_color;
+            current_intensity = led_intensity;
+            have_color = true;
+        } else {
+            ESP_LOGW("led", "Failed to take LED mutex - skipping update");
+        }
+
+        if (have_color) {
             // Apply intensity to color
             uint32_t final_color = apply_color_intensity(current_color, current_intensity);
-            
-            // Set all 3 LEDs to the same color
-            for (int i = 0; i < NUM_CONTROLLED_LEDS; i++) {
-                led_new_state.leds[i] = final_color;
-            }
-            
-            // Set remaining LEDs to off
-            for (int i = NUM_CONTROLLED_LEDS; i < NUM_LEDS; i++) {
-                led_new_state.leds[i] = LED_COLOR_OFF;
-            }
-            
-            // Update WS2812 LEDs
-            ws2812_write_leds(led_new_state);
-        } else {
-            // Fallback mode if mutex is not available
-            if (led_mutex == NULL) {
-                ESP_LOGW("led", "LED mutex not available, using direct access");
-                // Apply intensity to color
-                uint32_t final_color = apply_color_intensity(led_color, led_intensity);
-                
+
+            TickType_t now = xTaskGetTickCount();
+            bool changed = (final_color != last_written_color);
+            // Repeat writes for 500ms after a change so a corrupted frame can't stick
+            bool settling = (now - last_change_ticks) < pdMS_TO_TICKS(500);
+            // Slow refresh while visibly lit; fully idle once settled at off
+            bool refresh_due = (final_color != LED_COLOR_OFF) &&
+                               (now - last_write_ticks) >= pdMS_TO_TICKS(1000);
+
+            if (changed || settling || refresh_due) {
+                if (changed) {
+                    last_change_ticks = now;
+                }
+
                 // Set all 3 LEDs to the same color
                 for (int i = 0; i < NUM_CONTROLLED_LEDS; i++) {
                     led_new_state.leds[i] = final_color;
                 }
-                
+
                 // Set remaining LEDs to off
                 for (int i = NUM_CONTROLLED_LEDS; i < NUM_LEDS; i++) {
                     led_new_state.leds[i] = LED_COLOR_OFF;
                 }
-                
+
                 // Update WS2812 LEDs
-                ws2812_write_leds(led_new_state);
-            } else {
-                ESP_LOGW("led", "Failed to take LED mutex - skipping update");
+                if (ws2812_write_leds(led_new_state) == ESP_OK) {
+                    last_written_color = final_color;
+                    last_write_ticks = now;
+                }
             }
         }
 
