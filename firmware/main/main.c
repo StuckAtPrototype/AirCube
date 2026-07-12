@@ -16,6 +16,7 @@
 #include "i2c_driver.h"
 #include "serial_protocol.h"
 #include "button.h"
+#include "auto_dim.h"
 #include "history.h"
 #include "zigbee.h"
 #include "radio_mode.h"
@@ -312,6 +313,7 @@ void sensor_task(void *pvParameters)
 
             vcnl4040_read();
             lux = vcnl4040_get_lux();
+            auto_dim_update_lux(lux);
 
             // If an ENS210 is also fitted, read it too so we can compare its
             // temperature/humidity against the SCD41 (debug/calibration aid).
@@ -518,6 +520,9 @@ void app_main(void)
     // Decide Base vs Pro from sensor presence (drivers probed above). This
     // gates temp/RH source selection and Pro-only Zigbee clusters.
     aircube_model_detect();
+
+    // Apply configured brightness through auto-dim (Pro) or pass-through (Base).
+    auto_dim_init();
     
     // BLE-first radio mode: exactly one radio stack runs per boot (BLE+Zigbee
     // coexistence hung the PHY on the H2). Default is BLE with a connectable

@@ -19,7 +19,6 @@
  */
 
 #include "zigbee.h"
-#include "led.h"
 #include "button.h"
 #include "device_model.h"
 #include "radio_mode.h"
@@ -133,7 +132,7 @@ static void init_sw_build_id(void)
 
 static float current_brightness_percent(void)
 {
-    return led_get_intensity() * 100.0f;
+    return (float)button_get_brightness_percent();
 }
 
 static void report_attr(uint16_t cluster_id, uint16_t attr_id)

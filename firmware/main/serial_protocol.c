@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include "led.h"
+#include "button.h"
+#include "auto_dim.h"
 #include "history.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -123,14 +125,27 @@ static void send_error(const char* msg)
     }
 }
 
-static void send_config_response(float intensity, uint32_t period)
+static void send_config_response(void)
 {
-    char response[128];
+    auto_dim_status_t status;
+    auto_dim_get_status(&status);
+
+    char response[256];
     int len = snprintf(response, sizeof(response),
-        "{\"config\":{\"intensity\":%.2f,\"readout_period\":%lu}}\n",
-        intensity, (unsigned long)period);
-    
-    if (len > 0 && len < sizeof(response)) {
+        "{\"config\":{\"intensity\":%.2f,\"readout_period\":%lu,"
+        "\"auto_dim\":{\"enabled\":%s,\"night_enter_lux\":%.1f,\"day_exit_lux\":%.1f,"
+        "\"night_dim_pct\":%d,\"is_night\":%s,\"configured_pct\":%d,\"effective_pct\":%d}}}\n",
+        (float)status.configured_pct / 100.0f,
+        (unsigned long)get_sensor_readout_period_ms(),
+        status.config.enabled ? "true" : "false",
+        status.config.night_enter_lux,
+        status.config.day_exit_lux,
+        status.config.night_dim_pct,
+        status.is_night ? "true" : "false",
+        status.configured_pct,
+        status.effective_pct);
+
+    if (len > 0 && len < (int)sizeof(response)) {
         printf("%s", response);
         fflush(stdout);
     }
@@ -367,9 +382,7 @@ static bool parse_command(const char* buffer, size_t len)
     
     // Handle get_config command (no value field needed)
     if (strcmp(cmd_name, "get_config") == 0) {
-        float intensity = led_get_intensity();
-        uint32_t period = get_sensor_readout_period_ms();
-        send_config_response(intensity, period);
+        send_config_response();
         return true;
     }
     
@@ -405,6 +418,43 @@ static bool parse_command(const char* buffer, size_t len)
         return true;
     }
     
+    // Handle set_auto_dim command (object value with optional fields)
+    if (strcmp(cmd_name, "set_auto_dim") == 0) {
+        auto_dim_config_t cfg;
+        auto_dim_get_config(&cfg);
+
+        const char *enabled_str = strstr(buffer, "\"enabled\":");
+        if (enabled_str) {
+            const char *val = enabled_str + 10;
+            while (*val == ' ') val++;
+            cfg.enabled = (strncmp(val, "true", 4) == 0 || strncmp(val, "1", 1) == 0);
+        }
+
+        const char *night_enter = strstr(buffer, "\"night_enter_lux\":");
+        if (night_enter) {
+            cfg.night_enter_lux = strtof(night_enter + 19, NULL);
+        }
+
+        const char *day_exit = strstr(buffer, "\"day_exit_lux\":");
+        if (day_exit) {
+            cfg.day_exit_lux = strtof(day_exit + 16, NULL);
+        }
+
+        const char *night_dim = strstr(buffer, "\"night_dim_pct\":");
+        if (night_dim) {
+            cfg.night_dim_pct = (int)strtol(night_dim + 17, NULL, 10);
+        }
+
+        const char *samples = strstr(buffer, "\"lux_sample_count\":");
+        if (samples) {
+            cfg.lux_sample_count = (int)strtol(samples + 20, NULL, 10);
+        }
+
+        auto_dim_set_config(&cfg);
+        send_config_response();
+        return true;
+    }
+
     // For set commands, find value field
     const char* value_start = strstr(buffer, "\"value\":");
     if (!value_start) {
@@ -418,13 +468,13 @@ static bool parse_command(const char* buffer, size_t len)
     
     // Handle set_intensity command
     if (strcmp(cmd_name, "set_intensity") == 0) {
-        // Clamp value to valid range
         if (value < 0.0f) value = 0.0f;
         if (value > 1.0f) value = 1.0f;
-        
-        led_set_intensity(value);
+
+        int percent = (int)(value * 100.0f + 0.5f);
+        button_set_brightness_percent(percent);
         send_response("ok", "set_intensity", value);
-        ESP_LOGI(TAG, "LED intensity set to %.2f", value);
+        ESP_LOGI(TAG, "LED intensity set to %.2f (%d%%)", value, percent);
         return true;
     }
     

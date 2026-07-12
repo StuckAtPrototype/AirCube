@@ -14,19 +14,56 @@
 #include "esp_log.h"
 #include "freertos/semphr.h"
 #include "led_color_lib.h"
+#include <math.h>
 
 // Number of LEDs to control (using first 3 LEDs)
 #define NUM_CONTROLLED_LEDS 3
+
+// LED task cadence and brightness ramp timing
+#define LED_TASK_PERIOD_MS   20
+#define INTENSITY_RAMP_MS    1500   // Time to traverse full 0-100% range
 
 // Mutex to protect LED color and intensity updates
 static SemaphoreHandle_t led_mutex = NULL;
 
 // Global LED color and intensity variables (GRB format for WS2812 LEDs)
 static uint32_t led_color = LED_COLOR_OFF;      // Current LED color
-static float led_intensity = 0.6f;              // Current LED intensity (0.0 to 1.0)
+static float led_intensity = 0.0f;            // Current displayed intensity (0.0 to 1.0)
+static float led_intensity_target = 0.0f;     // Target intensity; led_task ramps toward this
 
 // LED state structure for WS2812 driver
 static struct led_state led_new_state = {0};
+
+static void intensity_ramp_tick_locked(void)
+{
+    float diff = led_intensity_target - led_intensity;
+    if (fabsf(diff) < 0.002f) {
+        led_intensity = led_intensity_target;
+        return;
+    }
+
+    const float step = 1.0f / ((float)INTENSITY_RAMP_MS / (float)LED_TASK_PERIOD_MS);
+    if (diff > 0.0f) {
+        led_intensity += (diff < step) ? diff : step;
+    } else {
+        led_intensity += (diff > -step) ? diff : -step;
+    }
+}
+
+static void led_render_frame(uint32_t color, float intensity)
+{
+    uint32_t final_color = apply_color_intensity(color, intensity);
+
+    for (int i = 0; i < NUM_CONTROLLED_LEDS; i++) {
+        led_new_state.leds[i] = final_color;
+    }
+
+    for (int i = NUM_CONTROLLED_LEDS; i < NUM_LEDS; i++) {
+        led_new_state.leds[i] = LED_COLOR_OFF;
+    }
+
+    ws2812_write_leds(led_new_state);
+}
 
 /**
  * @brief LED control task
@@ -40,55 +77,22 @@ static struct led_state led_new_state = {0};
 static void led_task(void *pvParameters)
 {
     while (1) {
-        // Take mutex to safely read LED color and intensity
         if (led_mutex != NULL && xSemaphoreTake(led_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            // Read current LED color and intensity safely
+            intensity_ramp_tick_locked();
             uint32_t current_color = led_color;
             float current_intensity = led_intensity;
             xSemaphoreGive(led_mutex);
-            
-            // Apply intensity to color
-            uint32_t final_color = apply_color_intensity(current_color, current_intensity);
-            
-            // Set all 3 LEDs to the same color
-            for (int i = 0; i < NUM_CONTROLLED_LEDS; i++) {
-                led_new_state.leds[i] = final_color;
-            }
-            
-            // Set remaining LEDs to off
-            for (int i = NUM_CONTROLLED_LEDS; i < NUM_LEDS; i++) {
-                led_new_state.leds[i] = LED_COLOR_OFF;
-            }
-            
-            // Update WS2812 LEDs
-            ws2812_write_leds(led_new_state);
+
+            led_render_frame(current_color, current_intensity);
+        } else if (led_mutex == NULL) {
+            ESP_LOGW("led", "LED mutex not available, using direct access");
+            intensity_ramp_tick_locked();
+            led_render_frame(led_color, led_intensity);
         } else {
-            // Fallback mode if mutex is not available
-            if (led_mutex == NULL) {
-                ESP_LOGW("led", "LED mutex not available, using direct access");
-                // Apply intensity to color
-                uint32_t final_color = apply_color_intensity(led_color, led_intensity);
-                
-                // Set all 3 LEDs to the same color
-                for (int i = 0; i < NUM_CONTROLLED_LEDS; i++) {
-                    led_new_state.leds[i] = final_color;
-                }
-                
-                // Set remaining LEDs to off
-                for (int i = NUM_CONTROLLED_LEDS; i < NUM_LEDS; i++) {
-                    led_new_state.leds[i] = LED_COLOR_OFF;
-                }
-                
-                // Update WS2812 LEDs
-                ws2812_write_leds(led_new_state);
-            } else {
-                ESP_LOGW("led", "Failed to take LED mutex - skipping update");
-            }
+            ESP_LOGW("led", "Failed to take LED mutex - skipping update");
         }
 
-        // Task delay for 20ms (50Hz update rate) - sufficient for smooth animations
-        // The main loop updates color more frequently, this task just displays the latest value
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(LED_TASK_PERIOD_MS));
     }
 }
 
@@ -136,24 +140,20 @@ void led_set_color(uint32_t color) {
 }
 
 /**
- * @brief Set LED intensity
- * 
- * This function sets the intensity (brightness) of all LEDs in a thread-safe manner.
- * The intensity value should be between 0.0 (off) and 1.0 (full brightness).
- * 
- * @param intensity Intensity value (0.0 to 1.0)
+ * @brief Set LED intensity target
+ *
+ * Sets the target brightness (0.0 off to 1.0 full). The LED task ramps the
+ * displayed intensity smoothly toward this value over INTENSITY_RAMP_MS.
  */
 void led_set_intensity(float intensity) {
-    // Clamp intensity to valid range
     if (intensity < 0.0f) intensity = 0.0f;
     if (intensity > 1.0f) intensity = 1.0f;
-    
+
     if (led_mutex != NULL && xSemaphoreTake(led_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        led_intensity = intensity;
+        led_intensity_target = intensity;
         xSemaphoreGive(led_mutex);
     } else if (led_mutex == NULL) {
-        // Fallback: direct assignment if mutex not available
-        led_intensity = intensity;
+        led_intensity_target = intensity;
     }
 }
 
@@ -176,11 +176,10 @@ uint32_t led_get_color(void) {
 }
 
 /**
- * @brief Get current LED intensity
- * 
- * This function returns the current LED intensity in a thread-safe manner.
- * 
- * @return Current intensity value (0.0 to 1.0)
+ * @brief Get current displayed LED intensity
+ *
+ * Returns the ramped (animated) intensity, which may be between the previous
+ * and target values while a transition is in progress.
  */
 float led_get_intensity(void) {
     float intensity = 0.0f;

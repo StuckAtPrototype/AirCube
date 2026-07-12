@@ -11,6 +11,7 @@
 
 #include "button.h"
 #include "led.h"
+#include "auto_dim.h"
 #include "zigbee.h"
 #include "ble_gatt.h"
 #include "radio_mode.h"
@@ -140,8 +141,8 @@ static void apply_brightness_percent(int percent)
     if (percent > 100) percent = 100;
 
     current_brightness_pct = percent;
-    led_set_intensity((float)percent / 100.0f);
     save_brightness_to_nvs(percent);
+    auto_dim_recompute();
     zigbee_report_brightness();     /* no-op unless joined to Zigbee */
     ble_gatt_report_brightness();   /* no-op unless a BLE central subscribed */
 }
@@ -297,15 +298,13 @@ void button_init(void)
         return;
     }
     
-    // Load saved brightness from NVS, or use default
+    // Load saved brightness from NVS, or use default. Effective output is
+    // applied later by auto_dim_init() after hardware model detection.
     int saved_pct = DEFAULT_BRIGHTNESS_PCT;
     if (load_brightness_from_nvs(&saved_pct)) {
         current_brightness_pct = saved_pct;
     }
-    
-    // Set initial brightness (either from NVS or default)
-    led_set_intensity((float)current_brightness_pct / 100.0f);
-    
-    ESP_LOGI(TAG, "Button initialized successfully");
+
+    ESP_LOGI(TAG, "Button initialized successfully (configured %d%%)", current_brightness_pct);
 }
 

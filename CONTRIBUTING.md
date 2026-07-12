@@ -33,6 +33,7 @@ AirCube/
 │       ├── led_color_lib.c/h     # Hue-to-GRB color math
 │       ├── ws2812_control.c/h    # Low-level WS2812 RMT driver
 │       ├── button.c/h            # Button debounce & brightness cycling
+│       ├── auto_dim.c/h          # Pro-only lux-based LED auto-dim
 │       ├── serial_protocol.c/h   # JSON serial command interface (USB)
 │       ├── history.c/h           # 7-day sensor history ring buffer on flash
 │       ├── zigbee.c/h            # Zigbee End Device (ZCL + custom cluster + brightness)
@@ -192,8 +193,9 @@ All commands are JSON with a `"cmd"` field. Send a complete JSON object followed
 
 | Command | Payload | Response |
 |---------|---------|----------|
-| `get_config` | `{"cmd":"get_config"}` | `{"config":{"intensity":0.60,"readout_period":1000}}` |
+| `get_config` | `{"cmd":"get_config"}` | `{"config":{"intensity":0.60,"readout_period":1000,"auto_dim":{...}}}` |
 | `set_intensity` | `{"cmd":"set_intensity","value":0.3}` | `{"status":"ok","cmd":"set_intensity","value":0.30}` |
+| `set_auto_dim` | `{"cmd":"set_auto_dim","enabled":true,"night_enter_lux":10,"day_exit_lux":15,"night_dim_pct":10}` | `{"config":{...}}` (full config echo) |
 | `set_readout_period` | `{"cmd":"set_readout_period","value":500}` | `{"status":"ok","cmd":"set_readout_period","value":500.00}` |
 | `get_history_info` | `{"cmd":"get_history_info"}` | `{"history_info":{"entries":288,"capacity":2016,"slot_bytes":32,"window_us":300000000}}` |
 | `get_history` | `{"cmd":"get_history","start":0,"count":48}` | `{"history":[...],"start":0,"count":48}` |
@@ -203,7 +205,23 @@ All commands are JSON with a `"cmd"` field. Send a complete JSON object followed
 
 ### Intensity range
 
-`set_intensity` accepts `0.0` (off) to `1.0` (full brightness).
+`set_intensity` accepts `0.0` (off) to `1.0` (full brightness). It persists the **configured** brightness; on Pro hardware `auto_dim` may lower the **effective** LED output at night without changing the stored value.
+
+### Auto-dim (Pro only)
+
+Lux-based night dimming uses the VCNL4040 ambient reading with hysteresis (default: enter night below 10 lux, exit day above 15 lux). Base hardware disables auto-dim automatically.
+
+Button / HA brightness presets map to night policy:
+
+| Configured % | Preset | Day | Night (auto-dim on) |
+|---|---|---|---|
+| 0 | Off | Off | Off |
+| 1–10 | 10% | Configured | Off |
+| 11–30 | 30% | Configured | Off |
+| 31–60 | 60% | Configured | Off |
+| 61–100 | 100% | Configured | 10% (default `night_dim_pct`) |
+
+BLE/Zigbee report the configured brightness, not the auto-dimmed effective value.
 
 ### Readout period range
 
