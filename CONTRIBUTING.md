@@ -195,7 +195,7 @@ All commands are JSON with a `"cmd"` field. Send a complete JSON object followed
 |---------|---------|----------|
 | `get_config` | `{"cmd":"get_config"}` | `{"config":{"intensity":0.60,"readout_period":1000,"auto_dim":{...}}}` |
 | `set_intensity` | `{"cmd":"set_intensity","value":0.3}` | `{"status":"ok","cmd":"set_intensity","value":0.30}` |
-| `set_auto_dim` | `{"cmd":"set_auto_dim","enabled":true,"night_enter_lux":10,"day_exit_lux":15,"night_dim_pct":10}` | `{"config":{...}}` (full config echo) |
+| `set_auto_dim` | `{"cmd":"set_auto_dim","enabled":true,"night_enter_lux":5,"day_exit_lux":15,"night_dim_pct":10}` | `{"config":{...}}` (full config echo) |
 | `set_readout_period` | `{"cmd":"set_readout_period","value":500}` | `{"status":"ok","cmd":"set_readout_period","value":500.00}` |
 | `get_history_info` | `{"cmd":"get_history_info"}` | `{"history_info":{"entries":288,"capacity":2016,"slot_bytes":32,"window_us":300000000}}` |
 | `get_history` | `{"cmd":"get_history","start":0,"count":48}` | `{"history":[...],"start":0,"count":48}` |
@@ -209,7 +209,7 @@ All commands are JSON with a `"cmd"` field. Send a complete JSON object followed
 
 ### Auto-dim (Pro only)
 
-Lux-based night dimming uses the VCNL4040 ambient reading with hysteresis (default: enter night below 10 lux, exit day above 15 lux). Base hardware disables auto-dim automatically.
+Lux-based night dimming uses the VCNL4040 ambient reading with hysteresis (default: enter night below 5 lux, exit day above 15 lux). Base hardware disables auto-dim automatically.
 
 Button / HA brightness presets map to night policy:
 

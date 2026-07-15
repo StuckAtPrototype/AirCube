@@ -19,10 +19,10 @@ static const char *TAG = "auto_dim";
 #define NVS_KEY_NIGHT_DIM_PCT   "ad_night_pct"
 #define NVS_KEY_LUX_SAMPLES     "ad_lux_smpl"
 
-#define DEFAULT_NIGHT_ENTER_LUX 10.0f
+#define DEFAULT_NIGHT_ENTER_LUX 5.0f
 #define DEFAULT_DAY_EXIT_LUX    15.0f
 #define DEFAULT_NIGHT_DIM_PCT   10
-#define DEFAULT_LUX_SAMPLES     1
+#define DEFAULT_LUX_SAMPLES     3
 
 static auto_dim_config_t s_config = {
     .enabled = true,
@@ -163,16 +163,17 @@ void auto_dim_init(void)
 {
     load_config_from_nvs();
 
-    // Migrate prior defaults to current thresholds (night < 10 lx, day > 15 lx).
+    // Migrate prior defaults to current thresholds (night < 5 lx, day > 15 lx).
     if ((s_config.night_enter_lux == 15.0f && s_config.day_exit_lux == 30.0f) ||
         (s_config.night_enter_lux == 12.0f && s_config.day_exit_lux == 20.0f) ||
         (s_config.night_enter_lux == 8.0f && s_config.day_exit_lux == 12.0f) ||
-        (s_config.night_enter_lux == 4.0f && s_config.day_exit_lux == 10.0f)) {
+        (s_config.night_enter_lux == 4.0f && s_config.day_exit_lux == 10.0f) ||
+        (s_config.night_enter_lux == 10.0f && s_config.day_exit_lux == 15.0f)) {
         s_config.night_enter_lux = DEFAULT_NIGHT_ENTER_LUX;
         s_config.day_exit_lux = DEFAULT_DAY_EXIT_LUX;
         save_config_to_nvs();
     }
-    if (s_config.lux_sample_count == 3) {
+    if (s_config.lux_sample_count == 1) {
         s_config.lux_sample_count = DEFAULT_LUX_SAMPLES;
         save_config_to_nvs();
     }

@@ -352,7 +352,7 @@ void sensor_task(void *pvParameters)
         // Read ENS16X air quality data
         int etvoc = ens16x_read_etvoc();
         int eco2 = ens16x_read_eco2();
-        int aqi_s = ens16x_read_aqi();         // ENS161 relative AQI-S (0-500)
+        int aqi_s = ens16x_read_aqi();         // Deprecated AQI-S; always 0
         int aqi = aqi_calculate(etvoc);        // Canonical AirCube VOC Level (TVOC-derived, 0-500)
         int aqi_uba = ens16x_read_aqi_uba();
         enum ENS_STATUS ens16x_status = ens16x_get_status();
