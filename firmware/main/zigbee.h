@@ -47,12 +47,16 @@ void zigbee_init(void);
  *
  * @param temp_c    Temperature in degrees Celsius (after offset correction)
  * @param humidity  Relative humidity in percent (0-100)
- * @param eco2      Equivalent CO2 in ppm
+ * @param eco2      Equivalent CO2 in ppm (ENS16X estimate, custom cluster 0xFC01)
  * @param etvoc     Equivalent TVOC in ppb
  * @param aqi       TVOC-derived VOC Level (0-500) on attribute 0x0002
+ * @param co2_ppm   True CO2 in ppm (SCD41). Pro only; reported on the standard
+ *                  Carbon Dioxide Measurement cluster (0x040D). Ignored on Base.
+ * @param lux       Ambient light in lux (VCNL4040). Pro only; reported on the
+ *                  standard Illuminance Measurement cluster (0x0400). Ignored on Base.
  */
 void zigbee_update_sensors(float temp_c, float humidity, int eco2, int etvoc,
-                           int aqi);
+                           int aqi, float co2_ppm, float lux);
 
 /**
  * @brief Push the current LED brightness to the Analog Output cluster.

@@ -1,7 +1,11 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  espressif/esp-zboss-lib: "~1.6.0"
-  espressif/esp-zigbee-lib: "~1.6.0"
+  # Pinned exactly: esp-zigbee-lib 1.6.8 (the only 1.6.x built for IDF 5.5.1) hangs
+  # in PHY init on ESP32-H2 (phy_dis_hw_set_freq / wait_freq_set_busy -> zigbee_main
+  # task_wdt at boot). 1.6.7 is the newest version that boots cleanly. Do NOT widen
+  # this to "~1.6.0" or "^1.6.7" or it will pull 1.6.8 again and reintroduce the hang.
+  espressif/esp-zboss-lib: "==1.6.4"
+  espressif/esp-zigbee-lib: "==1.6.7"
   ## Required IDF version
   idf:
     version: ">=5.0.0"

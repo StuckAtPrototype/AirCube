@@ -7,6 +7,7 @@
 #include <string.h>
 
 #define ENS210_I2C_ADDRESS 0x43
+#define ENS210_PART_ID     0x0210
 
 #define ENS210_REG_PART_ID 0x00
 #define ENS210_REG_SYS_CTRL 0x10
@@ -24,6 +25,12 @@ float temperature_K;
 float temperature_C;
 float temperature_F;
 float humidity_percentage;
+
+static bool ens210_present = false;
+
+bool ens210_is_present(void){
+    return ens210_present;
+}
 
 void ens210_get_envir(uint8_t * t, uint8_t * h){
     t[0] = ens210_t[0];
@@ -155,11 +162,51 @@ void ens210_init(void){
     uint8_t i2c_data[2];
     uint8_t i2c_byte_address[1];
 
+    ens210_present = false;
+
+    // Quietly check for an ACK at the ENS210 address first. On Pro hardware the
+    // ENS210 may be absent, so a no-ACK is a normal "not present" result, not a
+    // fault - skip cleanly without emitting I2C error logs.
+    if (!i2c_driver_probe(ENS210_I2C_ADDRESS)) {
+        ESP_LOGI("ens210", "ENS210 not present");
+        return;
+    }
+
     // Set the system into active mode (disable low power mode)
     // SYS_CTRL bit 0: LOW_POWER (0=disabled, device stays active)
+    // Done before the PART_ID probe so the device is awake out of power-on standby.
     i2c_data[0] = ENS210_REG_SYS_CTRL;
     i2c_data[1] = 0b0; // Disable low power mode (device stays in active state)
     i2c_driver_write(ENS210_I2C_ADDRESS, i2c_data, 2);
+
+    // Give the device a moment to come out of standby before reading PART_ID.
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+
+    // Probe for the ENS210 via its PART_ID register (0x00 -> 0x0210, little endian).
+    // On Pro hardware the ENS210 may be absent; skip configuration if not found so
+    // we don't spam the I2C bus with failed transactions.
+    uint8_t part[2] = {0};
+    i2c_byte_address[0] = ENS210_REG_PART_ID;
+    if (i2c_driver_read(ENS210_I2C_ADDRESS, i2c_byte_address, 1, part, 2) == ESP_OK) {
+        uint16_t part_id = (uint16_t)part[0] | ((uint16_t)part[1] << 8);
+        // Match only the low 12 bits (0x210). On our hardware the top nibble reads
+        // back as 0xA (PART_ID 0xA210) rather than the datasheet's 0x0; treat that
+        // as a benign variant/revision marker so the ENS210 is still recognized.
+        ens210_present = ((part_id & 0x0FFF) == (ENS210_PART_ID & 0x0FFF));
+        if (!ens210_present) {
+            ESP_LOGW("ens210", "Unexpected PART_ID 0x%04X (expected low 12 bits 0x%03X)",
+                     part_id, ENS210_PART_ID & 0x0FFF);
+        } else if (part_id != ENS210_PART_ID) {
+            ESP_LOGI("ens210", "ENS210 PART_ID 0x%04X (accepted via low-12-bit match)", part_id);
+        }
+    } else {
+        ens210_present = false;
+    }
+
+    if (!ens210_present) {
+        ESP_LOGI("ens210", "ENS210 not present");
+        return;
+    }
 
     // Enable continuous mode for both temperature and humidity
     // SENS_RUN: bit 0 = T_RUN (temperature), bit 1 = H_RUN (humidity)

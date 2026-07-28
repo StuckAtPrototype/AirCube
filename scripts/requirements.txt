@@ -1,7 +1,9 @@
-# Runtime dependencies
+# AirCube desktop app - runtime dependencies
+# Install everything with:  python install.py
 pyserial>=3.5
 matplotlib>=3.3
 PyQt6>=6.4
 
-# Build dependencies (for creating standalone executable)
+# Build dependency (for creating a standalone executable via build_exe.py).
+# Installed by:  python install.py --with-build
 # pyinstaller>=6.0

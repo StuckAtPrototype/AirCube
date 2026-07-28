@@ -1,6 +1,6 @@
 # AirCube
 
-**See your air** AirCube is a desktop air quality monitor with built-in **Home Assistant** support over **Zigbee**. It tracks temperature, humidity, eCO2, TVOC, and VOC Level -- showing air quality as a single, glanceable LED color and reporting every reading to your smart home.
+**See your air** AirCube is a desktop air quality monitor with built-in **Home Assistant** support over **Zigbee** or **Bluetooth (BLE)**. It tracks temperature, humidity, eCO2, TVOC, and VOC Level -- showing air quality as a single, glanceable LED color and reporting every reading to your smart home.
 
 Works standalone out of the box. Pairs with Home Assistant in minutes. Other platforms are supported through **[community-contributed extensions](#community-extensions)**.
 
@@ -37,13 +37,18 @@ That's it. AirCube works out of the box with no setup, no accounts, and no Wi-Fi
 
 ---
 
+AirCube ships in two models. **Base** measures VOC Level, eCO2, eTVOC, temperature, and humidity.
+**Pro** adds a true CO2 sensor (Sensirion SCD41, direct NDIR measurement -- more accurate than the
+eCO2 estimate) and an ambient light sensor (VCNL4040) that automatically dims the LED at night.
+
 ## What AirCube Measures
 
 | Measurement | Range | What It Tells You |
 |-------------|-------|------------------|
 | **VOC Level** | 0 -- 500 | TVOC-derived score against fixed indoor-air bands (firmware 1.5.0+; 0--500 scale in 1.5.1+) |
-| **AQI-S** (relative VOC Level, ScioSense) | 0 -- 500 | ENS161 relative score using the past 24 h as a baseline (**USB serial only**) |
+| **AQI-S** (deprecated) | -- | Legacy relative VOC score. As of firmware 1.5.0 this always reports **0** over USB serial -- kept only for compatibility. Use VOC Level instead. |
 | **eCO2** (equivalent CO2) | 400 -- 65,000 ppm | Estimated CO2 level derived from detected VOCs |
+| **CO2** (Pro only) | 400 -- 5,000 ppm | True CO2 concentration from the SCD41 (direct NDIR measurement) |
 | **eTVOC** (equivalent Total VOC) | 0 -- 65,000 ppb | Total volatile organic compound concentration |
 | **Temperature** | | Room temperature in Celsius |
 | **Humidity** | 0 -- 100 % | Relative humidity percentage |
@@ -66,11 +71,11 @@ AirCube uses a **ScioSense ENS161** gas sensor and an **ENS210** temperature/hum
 | Poor | Yellow → orange → red | 100 -- 200 | 650 -- 2,200 |
 | Unhealthy | Red | 200 -- 500 | 2,200 -- 5,500 |
 
-The LED color is derived from TVOC/VOC Level alone (eCO2 does not drive the LED). VOC Level is linear between band edges, so the LED fades smoothly.
+On Base hardware, the LED color is derived from TVOC/VOC Level alone (eCO2 does not drive the LED). VOC Level is linear between band edges, so the LED fades smoothly. See below for Pro's CO2 arbitration.
 
-**AQI-S (0--500, USB serial only)** -- ScioSense relative score vs. the past 24 hours (**100** = average). Below 100 is better than recent history; above 100 is worse. Not an absolute clean/dirty reading -- use VOC Level, eCO2, or eTVOC for that.
+**AQI-S (deprecated, USB serial only)** -- A legacy ScioSense relative score from firmware before 1.5.0. As of firmware 1.5.0, AQI-S is deprecated and always reports **0** -- it's kept in the serial output only for compatibility with older tools. Use **VOC Level**, **eCO2**/**eTVOC**, or true **CO2** (Pro) instead.
 
-Only **VOC Level** drives the LED color. See **[LED Reference](#led-reference)**.
+**VOC Level** drives the LED color on Base hardware. On **Pro**, the LED shows whichever is worse -- VOC Level or CO2 Level (from the true CO2 reading). See **[LED Reference](#led-reference)**.
 
 ### Warm-up and initial start-up
 
@@ -88,7 +93,7 @@ The ENS161 needs about **3 minutes** of warm-up in standard mode before readings
 
 ## Home Assistant Integration
 
-AirCube was designed for Home Assistant. It connects over **Zigbee** -- no USB cable to your server, no cloud, no Wi-Fi credentials to configure. Plug it in, pair it, and six entities show up automatically: temperature, humidity, eCO2, tVOC, VOC Level, and brightness.
+AirCube was designed for Home Assistant. It connects over **Zigbee** -- no USB cable to your server, no cloud, no Wi-Fi credentials to configure. Plug it in, hold the button for 3 seconds to start pairing, and six entities show up: temperature, humidity, eCO2, tVOC, VOC Level, and brightness.
 
 Once connected you can:
 - **Track air quality over time** with built-in history graphs
@@ -100,6 +105,14 @@ Once connected you can:
 **Works with** ZHA (built-in) and Zigbee2MQTT.
 
 **Full setup guide:** **[Connecting AirCube to Home Assistant](HOME_ASSISTANT.md)**
+
+### No Zigbee dongle? AirCube also works over Bluetooth
+
+AirCube boots into **BLE mode** by default (until you pair it to Zigbee) and broadcasts standard
+**BTHome** data -- temperature, humidity, CO2, and TVOC. If your Home Assistant instance has a
+Bluetooth adapter or an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html)
+nearby, it can often pick up these readings passively, with no pairing step and no Zigbee hardware
+at all. Building a custom BLE client? See the **[BLE GATT Protocol reference](docs/BLE_GATT_PROTOCOL.md)**.
 
 ---
 
@@ -174,7 +187,12 @@ flowchart LR
 | Steady red | 200+ | 2 200+ | Unhealthy |
 | Flashing blue | -- | -- | Zigbee pairing mode |
 
-Key gradient landmarks: **yellow** around VOC Level 105 (~730 ppb) and **orange** around VOC Level 150 (~1,460 ppb). Over **Zigbee**, TVOC-derived VOC Level is reported alongside eCO2, eTVOC, temperature, humidity, and brightness. **AQI-S** is available over **USB serial** only and does not drive the LED.
+Key gradient landmarks: **yellow** around VOC Level 105 (~730 ppb) and **orange** around VOC Level 150 (~1,460 ppb). Over **Zigbee**, TVOC-derived VOC Level is reported alongside eCO2, eTVOC, temperature, humidity, and brightness. **AQI-S** is deprecated, always reports 0, and does not drive the LED.
+
+**On Pro hardware**, the LED shows whichever reading is worse: VOC Level (as above) or **CO2 Level**, a
+0--500 score derived from the true SCD41 CO2 reading using the same band scale. If CO2 Level is
+higher than VOC Level, the LED reflects the CO2 reading instead. On **Base** hardware, CO2 Level is
+always 0, so VOC Level always drives the LED.
 
 ### Firmware 1.4.3 and below (legacy)
 
@@ -230,6 +248,7 @@ AirCube is fully open source -- firmware, PCB design, enclosure, desktop softwar
 | | |
 |---|---|
 | [Contributing Guide](CONTRIBUTING.md) | Build from source, firmware architecture, serial protocol, how to contribute |
+| [BLE GATT Protocol](docs/BLE_GATT_PROTOCOL.md) | BLE GATT protocol reference for building custom BLE clients |
 | [Firmware Update Guide](FIRMWARE_UPDATE.md) | Update your AirCube firmware from a browser |
 | [Home Assistant Guide](HOME_ASSISTANT.md) | ZHA and Zigbee2MQTT setup |
 | [Samsung hub integration](SMARTTHINGS.md) | Community-contributed: Edge driver, CLI setup (see **[Community extensions](#community-extensions)**) |

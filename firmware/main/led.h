@@ -48,12 +48,10 @@ void led_init(void);
 void led_set_color(uint32_t color);
 
 /**
- * @brief Set LED intensity
- * 
- * This function sets the intensity (brightness) of all LEDs in a thread-safe manner.
- * The intensity value should be between 0.0 (off) and 1.0 (full brightness).
- * 
- * @param intensity Intensity value (0.0 to 1.0)
+ * @brief Set LED intensity target (0.0 off to 1.0 full).
+ *
+ * Brightness ramps smoothly toward the target; all callers share the same
+ * animation (button, BLE, Zigbee, auto-dim, serial).
  */
 void led_set_intensity(float intensity);
 
@@ -67,11 +65,9 @@ void led_set_intensity(float intensity);
 uint32_t led_get_color(void);
 
 /**
- * @brief Get current LED intensity
- * 
- * This function returns the current LED intensity in a thread-safe manner.
- * 
- * @return Current intensity value (0.0 to 1.0)
+ * @brief Get current displayed LED intensity (0.0 to 1.0).
+ *
+ * May differ from the last target while a ramp is in progress.
  */
 float led_get_intensity(void);
 
