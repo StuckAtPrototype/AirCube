@@ -146,9 +146,26 @@ esp_err_t history_read_slot(uint16_t logical_index, history_slot_t *slot);
  * @brief Clear all history data
  *
  * Erases the entire flash partition and resets the write position.
+ * Refused (ESP_ERR_INVALID_STATE) while a history stream is active so
+ * logical indices cannot shift under a reader.
  *
  * @return ESP_OK on success
  */
 esp_err_t history_clear(void);
+
+/**
+ * @brief Try to claim the device-wide history stream slot.
+ *
+ * Only one bulk history transfer may run at a time, regardless of
+ * transport (USB serial paging or BLE streaming). Callers that fail to
+ * acquire should report "busy" to their client, which retries later.
+ *
+ * @return true if acquired (caller must call history_stream_release()),
+ *         false if another stream is already active
+ */
+bool history_stream_acquire(void);
+
+/** @brief Release the stream slot claimed by history_stream_acquire(). */
+void history_stream_release(void);
 
 #endif // HISTORY_H

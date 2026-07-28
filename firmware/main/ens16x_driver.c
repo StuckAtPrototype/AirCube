@@ -15,7 +15,6 @@
 #define ENS16X_REG_DATA_ETVOC 0x22
 #define ENS16X_REG_DATA_ECO2 0x24
 #define ENS16X_REG_DATA_AQI_UBA 0x21
-#define ENS16X_REG_DATA_AQI_S 0x26
 
 #define ENS16X_REG_RH_IN 0x15
 #define ENS16X_REG_TH_IN 0x13
@@ -115,16 +114,9 @@ int ens16x_read_eco2(void){
 }
 
 int ens16x_read_aqi(void){
-    uint8_t i2c_data[2];
-    memset(i2c_data, 0, 2);
-    uint8_t i2c_byte_address[] = {ENS16X_REG_DATA_AQI_S};
-    i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 2);
-    uint16_t aqi = ((uint16_t )i2c_data[0] | (uint16_t)i2c_data[1] << 8);
-
-    ESP_LOGI("ens16x", "aqi: %hu", aqi);
-    ens16x_aqi = aqi;
-
-    return aqi;
+    // AQI-S (ENS161 register 0x26) is unused; keep the API for serial compat.
+    ens16x_aqi = 0;
+    return 0;
 }
 
 int ens16x_read_aqi_uba(void){

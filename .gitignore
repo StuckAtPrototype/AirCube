@@ -6,6 +6,7 @@ cmake-build-debug/
 sdkconfig.old
 sdkconfig
 venv/
+.venv/
 .DS_Store
 hardware/racer/fp-info-cache
 hardware/racer/racer-backups

@@ -7,6 +7,8 @@
 #include "esp_partition.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <string.h>
 #include <limits.h>
 
@@ -24,6 +26,16 @@ static uint16_t s_next_sequence = 0;     // Next sequence number to assign
 static uint16_t s_valid_count = 0;       // Number of valid (non-empty) slots
 static history_accumulator_t s_accum;    // Current window accumulator
 static bool s_initialized = false;
+
+// Concurrency: serial (USB) and BLE handlers may access the module from
+// different tasks while the sensor task flushes. s_mutex guards reads,
+// the 5-minute flush write, and clear. s_stream_active is a device-wide
+// "one bulk history transfer at a time" flag shared by all transports.
+static SemaphoreHandle_t s_mutex = NULL;
+static volatile bool s_stream_active = false;
+
+#define HISTORY_LOCK()   xSemaphoreTake(s_mutex, portMAX_DELAY)
+#define HISTORY_UNLOCK() xSemaphoreGive(s_mutex)
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -186,6 +198,14 @@ static uint16_t clamp_u16(int val)
 
 esp_err_t history_init(void)
 {
+    if (s_mutex == NULL) {
+        s_mutex = xSemaphoreCreateMutex();
+        if (s_mutex == NULL) {
+            ESP_LOGE(TAG, "Failed to create history mutex");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     // Find the partition
     s_partition = esp_partition_find_first(
         HISTORY_PARTITION_TYPE, HISTORY_PARTITION_SUBTYPE, HISTORY_PARTITION_LABEL);
@@ -265,6 +285,10 @@ bool history_check_flush(void)
         return false;  // Window not yet elapsed
     }
 
+    // Serialize the flush against concurrent reads from the serial/BLE
+    // history handlers (they run in different tasks).
+    HISTORY_LOCK();
+
     // Compute averages
     float n = (float)s_accum.sample_count;
     history_slot_t slot;
@@ -298,6 +322,7 @@ bool history_check_flush(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read target slot %u: %s", s_write_index, esp_err_to_name(err));
         reset_accumulator();
+        HISTORY_UNLOCK();
         return false;
     }
 
@@ -310,6 +335,7 @@ bool history_check_flush(void)
             ESP_LOGE(TAG, "Failed to erase sector for slot %u: %s",
                      s_write_index, esp_err_to_name(err));
             reset_accumulator();
+            HISTORY_UNLOCK();
             return false;
         }
 
@@ -334,6 +360,7 @@ bool history_check_flush(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write slot %u: %s", s_write_index, esp_err_to_name(err));
         reset_accumulator();
+        HISTORY_UNLOCK();
         return false;
     }
 
@@ -358,11 +385,14 @@ bool history_check_flush(void)
 
     // Reset accumulator for next window
     reset_accumulator();
+    HISTORY_UNLOCK();
     return true;
 }
 
 void history_get_info(uint16_t *write_index, uint16_t *entry_count)
 {
+    if (s_mutex != NULL) HISTORY_LOCK();
+
     if (write_index) *write_index = s_write_index;
 
     uint16_t count = s_valid_count;
@@ -370,6 +400,8 @@ void history_get_info(uint16_t *write_index, uint16_t *entry_count)
         count = HISTORY_MAX_VALID_ENTRIES;
     }
     if (entry_count) *entry_count = count;
+
+    if (s_mutex != NULL) HISTORY_UNLOCK();
 }
 
 esp_err_t history_read_slot(uint16_t logical_index, history_slot_t *slot)
@@ -378,12 +410,15 @@ esp_err_t history_read_slot(uint16_t logical_index, history_slot_t *slot)
         return ESP_ERR_INVALID_ARG;
     }
 
+    HISTORY_LOCK();
+
     uint16_t count = s_valid_count;
     if (count > HISTORY_MAX_VALID_ENTRIES) {
         count = HISTORY_MAX_VALID_ENTRIES;
     }
 
     if (logical_index >= count) {
+        HISTORY_UNLOCK();
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -396,6 +431,9 @@ esp_err_t history_read_slot(uint16_t logical_index, history_slot_t *slot)
 
     esp_err_t err = esp_partition_read(s_partition, slot_offset(physical_index),
                                        slot, sizeof(history_slot_t));
+
+    HISTORY_UNLOCK();
+
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read slot at physical index %u: %s",
                  physical_index, esp_err_to_name(err));
@@ -419,12 +457,22 @@ esp_err_t history_clear(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    // Refuse while a bulk transfer is running -- clearing shifts logical
+    // indices and sequence numbers under the reader.
+    if (s_stream_active) {
+        ESP_LOGW(TAG, "history_clear refused: stream active");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     ESP_LOGI(TAG, "Clearing all history data");
+
+    HISTORY_LOCK();
 
     // Erase the entire partition
     esp_err_t err = esp_partition_erase_range(s_partition, 0, s_partition->size);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to erase partition: %s", esp_err_to_name(err));
+        HISTORY_UNLOCK();
         return err;
     }
 
@@ -434,6 +482,28 @@ esp_err_t history_clear(void)
     s_valid_count = 0;
     reset_accumulator();
 
+    HISTORY_UNLOCK();
+
     ESP_LOGI(TAG, "History cleared");
     return ESP_OK;
+}
+
+bool history_stream_acquire(void)
+{
+    if (s_mutex == NULL) {
+        return false;
+    }
+    bool acquired = false;
+    HISTORY_LOCK();
+    if (!s_stream_active) {
+        s_stream_active = true;
+        acquired = true;
+    }
+    HISTORY_UNLOCK();
+    return acquired;
+}
+
+void history_stream_release(void)
+{
+    s_stream_active = false;
 }
