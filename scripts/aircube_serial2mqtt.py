@@ -26,7 +26,19 @@ import sys
 import threading
 import time
 
-import serial
+try:
+    import serial
+except ImportError:
+    serial = None
+
+if serial is None or not hasattr(serial, "Serial"):
+    sys.stderr.write(
+        "ERROR: pyserial is not installed (or the wrong 'serial' package is).\n"
+        "  pip uninstall serial\n"
+        "  pip install pyserial\n"
+    )
+    sys.exit(1)
+
 import paho.mqtt.client as mqtt
 
 try:
@@ -35,19 +47,55 @@ except AttributeError:
     JSON_DECODE_ERROR = ValueError
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ENV_FILE = os.path.join(SCRIPT_DIR, ".env")
+ENV_CANDIDATES = [
+    os.path.join(SCRIPT_DIR, ".env"),
+    os.path.join(SCRIPT_DIR, ".env.serial2mqtt"),
+    os.path.expanduser("~/.env"),
+]
+ENV_FILE = ""
 DOTENV_AVAILABLE = False
 ENV_LOADED = False
 
-try:
-    from dotenv import load_dotenv
 
-    DOTENV_AVAILABLE = True
-    if os.path.isfile(ENV_FILE):
-        load_dotenv(ENV_FILE)
-        ENV_LOADED = True
-except ImportError:
-    pass
+def load_env_file(path):
+    """Minimal .env loader (no python-dotenv required)."""
+    with open(path, "r") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                os.environ[key] = value
+
+
+def init_env():
+    global ENV_FILE, ENV_LOADED, DOTENV_AVAILABLE
+
+    try:
+        from dotenv import load_dotenv
+
+        for path in ENV_CANDIDATES:
+            if os.path.isfile(path):
+                load_dotenv(path)
+                ENV_FILE = path
+                ENV_LOADED = True
+                DOTENV_AVAILABLE = True
+                return
+    except ImportError:
+        pass
+
+    for path in ENV_CANDIDATES:
+        if os.path.isfile(path):
+            load_env_file(path)
+            ENV_FILE = path
+            ENV_LOADED = True
+            return
+
+
+init_env()
 
 
 def log_env_status(logger):
@@ -56,19 +104,12 @@ def log_env_status(logger):
         logger.info("Loaded config from %s", ENV_FILE)
         return
 
-    if not os.path.isfile(ENV_FILE):
-        return
-
-    if DOTENV_AVAILABLE:
-        logger.warning(
-            "Found %s but dotenv did not load it; using script defaults", ENV_FILE
-        )
-    else:
-        logger.warning(
-            "Found %s but python-dotenv is not installed - .env ignored, "
-            "using script defaults. Install with: pip install python-dotenv or edit script directly" ,
-            ENV_FILE,
-        )
+    for path in ENV_CANDIDATES:
+        if os.path.isfile(path):
+            logger.warning(
+                "Found %s but could not load it; using script defaults", path
+            )
+            return
 
 
 def serial_port_open(ser):
@@ -84,7 +125,16 @@ def serial_port_open(ser):
 # ---------------------------------------------------------------------------
 # Configuration - override with environment variables
 # ---------------------------------------------------------------------------
-SERIAL_PORT = os.getenv("AIRCUBE_PORT", "/dev/cu.usbmodem101")
+if sys.platform == "darwin":
+    _DEFAULT_SERIAL_PORT = "/dev/cu.usbmodem101"
+else:
+    _DEFAULT_SERIAL_PORT = "/dev/ttyACM0"
+
+SERIAL_PORT = os.getenv("AIRCUBE_PORT", _DEFAULT_SERIAL_PORT)
+if sys.platform != "darwin" and (
+    "usbmodem" in SERIAL_PORT or SERIAL_PORT.startswith("/dev/cu.")
+):
+    SERIAL_PORT = _DEFAULT_SERIAL_PORT
 SERIAL_BAUD = int(os.getenv("AIRCUBE_BAUD", "115200"))
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
@@ -94,6 +144,9 @@ DEVICE_NAME = os.getenv("AIRCUBE_NAME", "AirCube")
 DEVICE_ID = os.getenv("AIRCUBE_ID", "aircube_1")  # unique per device
 DISCOVERY_PREFIX = os.getenv("HA_DISCOVERY_PREFIX", "homeassistant")
 PUBLISH_INTERVAL = int(os.getenv("AIRCUBE_INTERVAL", "0"))
+SENSOR_INTERVAL = float(os.getenv("AIRCUBE_SENSOR_INTERVAL", "1.0"))
+COMMAND_GAP = float(os.getenv("AIRCUBE_COMMAND_GAP", "0.15"))
+COMMAND_MIN_INTERVAL = float(os.getenv("AIRCUBE_COMMAND_INTERVAL", "1.0"))
 
 STATE_TOPIC = "aircube/{0}/state".format(DEVICE_ID)
 AVAIL_TOPIC = "aircube/{0}/availability".format(DEVICE_ID)
@@ -125,11 +178,19 @@ class BridgeState(object):
 
     def __init__(self):
         self.ser = None
-        self.write_lock = threading.Lock()
-        self.intensity_ack = threading.Event()
+        self.mqtt_client = None
         self.intensity_value = None
+        self.expected_intensity = None
         self.sensor_queue = queue.Queue()
         self.stop = threading.Event()
+        self.reader_stop = threading.Event()
+        self.reader_thread = None
+        self.brightness_lock = threading.Lock()
+        self.pending_brightness = None
+        self.last_brightness_at = 0.0
+        self.last_sensor_at = 0.0
+        self.brightness_due_at = 0.0
+        self.read_errors = 0
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +265,18 @@ def on_disconnect(client, userdata, rc):
     log.warning("MQTT disconnected (rc=%s), will retry", rc)
 
 
+def mqtt_text(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value
+
+
 def build_mqtt_client(bridge):
-    client = mqtt.Client(client_id=DEVICE_ID, clean_session=True, userdata=bridge)
+    try:
+        client = mqtt.Client(client_id=DEVICE_ID, clean_session=True, userdata=bridge)
+    except TypeError:
+        client = mqtt.Client(client_id=DEVICE_ID, clean_session=True)
+        client._userdata = bridge
     client.will_set(AVAIL_TOPIC, "offline", retain=True)
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
@@ -221,7 +292,7 @@ def build_mqtt_client(bridge):
 def open_serial(port, baud, retries=10):
     for attempt in range(1, retries + 1):
         try:
-            ser = serial.Serial(port, baud, timeout=5)
+            ser = serial.Serial(port, baud, timeout=1)
             log.info("Serial opened: %s @ %d baud", port, baud)
             return ser
         except serial.SerialException as exc:
@@ -231,6 +302,37 @@ def open_serial(port, baud, retries=10):
             time.sleep(3)
     log.error("Could not open serial port %s after %d attempts", port, retries)
     sys.exit(1)
+
+
+def make_set_intensity_command(intensity):
+    return '{{"cmd":"set_intensity","value":{0:.2f}}}\n'.format(float(intensity))
+
+
+def extract_json_from_line(line):
+    start = line.find("{")
+    end = line.rfind("}")
+    if start >= 0 and end > start:
+        return line[start : end + 1]
+    return line.strip()
+
+
+def start_reader(bridge):
+    if bridge.reader_thread is not None and bridge.reader_thread.is_alive():
+        return
+    bridge.reader_stop.clear()
+    bridge.reader_thread = threading.Thread(
+        target=serial_reader_loop, args=(bridge,)
+    )
+    bridge.reader_thread.daemon = True
+    bridge.reader_thread.start()
+
+
+def stop_reader(bridge, timeout=3.0):
+    bridge.reader_stop.set()
+    thread = bridge.reader_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout)
+    bridge.reader_thread = None
 
 
 def parse_brightness_payload(raw):
@@ -269,113 +371,145 @@ def parse_brightness_payload(raw):
 
 
 def parse_set_intensity_response(raw):
-    """Return applied intensity if raw is a set_intensity ack, else None."""
     try:
-        parsed = json.loads(raw.strip())
+        parsed = json.loads(extract_json_from_line(raw))
     except JSON_DECODE_ERROR:
         return None
-
     if parsed.get("status") == "ok" and parsed.get("cmd") == "set_intensity":
         return float(parsed.get("value", 0))
     return None
 
 
 def dispatch_serial_line(bridge, line):
-    """Route one serial line to brightness ack handling or the sensor queue."""
     stripped = line.strip()
     if not stripped:
-        return
+        return False
 
     applied = parse_set_intensity_response(stripped)
     if applied is not None:
-        bridge.intensity_value = applied
-        bridge.intensity_ack.set()
-        return
+        if bridge.expected_intensity is not None:
+            if abs(applied - bridge.expected_intensity) <= 0.02:
+                bridge.intensity_value = applied
+                bridge.expected_intensity = None
+                if bridge.mqtt_client is not None:
+                    bridge.mqtt_client.publish(
+                        BRIGHTNESS_STATE_TOPIC,
+                        "{0:.2f}".format(applied),
+                        retain=True,
+                    )
+                log.info("Brightness set to %.2f", applied)
+        return False
 
     payload = parse_aircube(stripped)
     if payload is not None:
+        bridge.last_sensor_at = time.time()
+        bridge.brightness_due_at = bridge.last_sensor_at + COMMAND_GAP
         bridge.sensor_queue.put(payload)
-        return
-
-    log.debug("Skipping non-sensor line: %s", stripped)
-
-
-def serial_reader_loop(bridge):
-    """Single reader for all serial input so command acks are never dropped."""
-    log.info("Serial reader thread started")
-    while not bridge.stop.is_set():
-        ser = bridge.ser
-        if not serial_port_open(ser):
-            time.sleep(0.1)
-            continue
-
-        try:
-            raw = ser.readline().decode("utf-8", "replace")
-            if raw:
-                dispatch_serial_line(bridge, raw)
-        except serial.SerialException as exc:
-            log.error("Serial reader error: %s", exc)
-            bridge.sensor_queue.put(None)
-
-
-def send_set_intensity(bridge, intensity):
-    """Send set_intensity to the device and wait for ack from the reader thread."""
-    if bridge is None:
-        log.error("Internal bridge state missing; cannot set brightness")
-        return False
-
-    if not serial_port_open(bridge.ser):
-        log.error("Serial port not open; cannot set brightness")
-        return False
-
-    # Firmware parser expects compact JSON (no spaces).
-    command = json.dumps(
-        {"cmd": "set_intensity", "value": intensity},
-        separators=(",", ":"),
-    ) + "\n"
-    bridge.intensity_ack.clear()
-    bridge.intensity_value = None
-
-    with bridge.write_lock:
-        try:
-            bridge.ser.write(command.encode("utf-8"))
-            bridge.ser.flush()
-            log.info("Sent set_intensity command: %.2f", intensity)
-        except serial.SerialException as exc:
-            log.error("Serial write failed while setting brightness: %s", exc)
-            return False
-
-    if bridge.intensity_ack.wait(5.0):
-        log.info("Brightness set to %.2f via serial", bridge.intensity_value)
         return True
 
-    log.warning("Timed out waiting for set_intensity response (command was sent)")
     return False
 
 
-def on_message(client, userdata, msg):
-    if msg.topic != BRIGHTNESS_CMD_TOPIC:
+def maybe_send_brightness(bridge):
+    """Send queued brightness once we are past the post-sensor delay."""
+    if bridge.pending_brightness is None:
+        return
+    if bridge.last_sensor_at <= 0:
+        return
+    now = time.time()
+    if now < bridge.brightness_due_at:
+        return
+    if now - bridge.last_brightness_at < COMMAND_MIN_INTERVAL:
         return
 
-    intensity = parse_brightness_payload(msg.payload.decode("utf-8", "replace"))
+    intensity = None
+    with bridge.brightness_lock:
+        if bridge.pending_brightness is None:
+            return
+        intensity = bridge.pending_brightness
+        bridge.pending_brightness = None
+
+    if not serial_port_open(bridge.ser):
+        with bridge.brightness_lock:
+            bridge.pending_brightness = intensity
+        return
+
+    command = make_set_intensity_command(intensity)
+    bridge.expected_intensity = float(intensity)
+    try:
+        bridge.ser.write(command.encode("utf-8"))
+        bridge.ser.flush()
+        bridge.last_brightness_at = time.time()
+        log.info(
+            "Sent set_intensity: %.2f (%.0fms after sensor)",
+            intensity,
+            (bridge.last_brightness_at - bridge.last_sensor_at) * 1000,
+        )
+        if bridge.mqtt_client is not None:
+            bridge.mqtt_client.publish(
+                BRIGHTNESS_STATE_TOPIC,
+                "{0:.2f}".format(intensity),
+                retain=True,
+            )
+    except serial.SerialException as exc:
+        log.error("Serial write failed: %s", exc)
+        bridge.expected_intensity = None
+        with bridge.brightness_lock:
+            bridge.pending_brightness = intensity
+        bridge.sensor_queue.put(None)
+
+
+def serial_reader_loop(bridge):
+    """Single owner of serial I/O — old Pi USB wedges on concurrent read+write."""
+    log.info("Serial reader thread started")
+    while not bridge.reader_stop.is_set() and not bridge.stop.is_set():
+        if not serial_port_open(bridge.ser):
+            time.sleep(0.1)
+            continue
+
+        maybe_send_brightness(bridge)
+
+        try:
+            raw = bridge.ser.readline().decode("utf-8", "replace")
+            if raw:
+                bridge.read_errors = 0
+                dispatch_serial_line(bridge, raw)
+        except serial.SerialException as exc:
+            bridge.read_errors += 1
+            log.warning(
+                "Serial read glitch (%d/5): %s", bridge.read_errors, exc
+            )
+            if bridge.read_errors >= 5:
+                log.error("Too many serial read errors, reconnecting")
+                bridge.sensor_queue.put(None)
+                break
+            time.sleep(0.5)
+    log.info("Serial reader thread stopped")
+
+
+def queue_brightness(bridge, intensity):
+    with bridge.brightness_lock:
+        bridge.pending_brightness = intensity
+
+
+def on_message(client, userdata, msg):
+    topic = mqtt_text(msg.topic)
+    if topic != BRIGHTNESS_CMD_TOPIC:
+        return
+
+    intensity = parse_brightness_payload(mqtt_text(msg.payload))
     if intensity is None:
-        log.warning("Invalid brightness payload on %s: %r", msg.topic, msg.payload)
+        log.warning("Invalid brightness payload on %s: %r", topic, msg.payload)
         return
 
     bridge = userdata
+    if bridge is None:
+        bridge = getattr(client, "_userdata", None)
     if not isinstance(bridge, BridgeState):
-        log.error(
-            "MQTT userdata is not bridge state (%r); cannot set brightness", userdata
-        )
+        log.error("MQTT userdata is not bridge state (%r)", userdata)
         return
 
-    if send_set_intensity(bridge, intensity):
-        applied = (
-            bridge.intensity_value
-            if bridge.intensity_value is not None
-            else intensity
-        )
-        client.publish(BRIGHTNESS_STATE_TOPIC, "{0:.2f}".format(applied), retain=True)
+    queue_brightness(bridge, intensity)
 
 
 def parse_aircube(raw):
@@ -423,8 +557,14 @@ def main():
     log_env_status(log)
     log.info("Serial: %s", SERIAL_PORT)
     log.info("Interval: %s seconds", args.interval)
+    log.info(
+        "Brightness: %.0fms after each sensor (sensor period %.1fs)",
+        COMMAND_GAP * 1000,
+        SENSOR_INTERVAL,
+    )
 
     bridge = BridgeState()
+    bridge.mqtt_client = None
     client = None
     if not args.no_mqtt:
         log.info("MQTT: %s:%s  State topic: %s", MQTT_HOST, MQTT_PORT, STATE_TOPIC)
@@ -436,15 +576,14 @@ def main():
             log.error("Could not connect to MQTT broker: %s", exc)
             sys.exit(1)
         client.loop_start()
+        bridge.mqtt_client = client
     else:
         log.info("MQTT disabled: running in print-only mode")
 
     ser = open_serial(SERIAL_PORT, SERIAL_BAUD)
     bridge.ser = ser
 
-    reader = threading.Thread(target=serial_reader_loop, args=(bridge,))
-    reader.daemon = True
-    reader.start()
+    start_reader(bridge)
 
     consecutive_errors = 0
     buffer = collections.defaultdict(list)
@@ -504,17 +643,26 @@ def main():
             log.error("Serial error: %s (attempt %d)", exc, consecutive_errors)
             if client:
                 client.publish(AVAIL_TOPIC, "offline", retain=True)
-            ser.close()
+            stop_reader(bridge)
+            try:
+                ser.close()
+            except serial.SerialException:
+                pass
             bridge.ser = None
+            bridge.last_sensor_at = 0.0
+            bridge.brightness_due_at = 0.0
+            bridge.read_errors = 0
             time.sleep(5)
             ser = open_serial(SERIAL_PORT, SERIAL_BAUD)
             bridge.ser = ser
+            start_reader(bridge)
             if client:
                 client.publish(AVAIL_TOPIC, "online", retain=True)
 
         except KeyboardInterrupt:
             log.info("Shutting down")
             bridge.stop.set()
+            stop_reader(bridge)
             if client:
                 client.publish(AVAIL_TOPIC, "offline", retain=True)
                 client.loop_stop()
