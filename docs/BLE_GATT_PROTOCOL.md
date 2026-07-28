@@ -2,8 +2,8 @@
 
 Protocol between an AirCube in **BLE mode** (its default radio mode when not
 joined to a Zigbee network) and client apps (iOS app, future desktop BLE).
-The firmware implements this in `firmware/main/ble_gatt.c`; the iOS client in
-`ios/AirCube/BLE/`.
+The firmware implements this in `firmware/main/ble_gatt.c`. The iOS client is
+maintained in a separate repository — there is no `ios/` directory in this repo.
 
 All multi-byte fields are **little-endian** (native ESP32 byte order).
 
@@ -11,8 +11,13 @@ All multi-byte fields are **little-endian** (native ESP32 byte order).
 
 | Packet | Contents |
 |---|---|
-| Advertisement (connectable) | Flags (0x06) + BTHome v2 service data (UUID 0xFCD2 — same payload as `ble_bthome.c`, so HA Bluetooth proxies keep working) |
+| Advertisement (connectable) | Flags (0x06) + BTHome v2 service data (UUID 0xFCD2 — same payload format as the reference implementation in `ble_bthome.c`, so HA Bluetooth proxies keep working) |
 | Scan response | Complete local name `AirCube` + 128-bit AirCube service UUID |
+
+`ble_bthome.c` exists in the source tree as a standalone reference but is **not** part of the
+current build (it's not listed in `firmware/main/CMakeLists.txt`). The live BTHome v2 payload is
+generated inline by `ble_gatt.c`'s `do_advertise()`. This advertisement is only broadcast while
+the device is in BLE mode — it stops once the device joins a Zigbee network.
 
 iOS clients scan with `withServices: [AIRCUBE_SERVICE]`; CoreBluetooth matches
 UUIDs from the scan response.

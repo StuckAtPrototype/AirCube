@@ -26,8 +26,11 @@ AirCube/
 │   ├── CMakeLists.txt     # Top-level CMake (IDF project)
 │   └── main/
 │       ├── main.c                # App entry point, FreeRTOS tasks, LED loop
+│       ├── device_model.c/h      # Base vs Pro detection (SCD41 / VCNL4040 presence)
 │       ├── ens210.c/h            # ENS210 temperature & humidity driver (I2C)
 │       ├── ens16x_driver.c/h     # ENS16X air quality driver (I2C)
+│       ├── scd41.c/h             # SCD41 true NDIR CO2 driver (I2C, Pro only)
+│       ├── vcnl4040.c/h          # VCNL4040 ambient light driver (I2C, Pro only)
 │       ├── i2c_driver.c/h        # Shared I2C bus init
 │       ├── led.c/h               # Thread-safe LED color & intensity control
 │       ├── led_color_lib.c/h     # Hue-to-GRB color math
@@ -36,6 +39,9 @@ AirCube/
 │       ├── auto_dim.c/h          # Pro-only lux-based LED auto-dim
 │       ├── serial_protocol.c/h   # JSON serial command interface (USB)
 │       ├── history.c/h           # 7-day sensor history ring buffer on flash
+│       ├── radio_mode.c/h        # BLE-vs-Zigbee mode selection, pairing/reboot logic
+│       ├── ble_gatt.c/h          # BLE GATT server + BTHome v2 advertising
+│       ├── ble_bthome.c/h        # Standalone BTHome broadcaster reference -- not in the build (absent from CMakeLists.txt SRCS)
 │       ├── zigbee.c/h            # Zigbee End Device (ZCL + custom cluster + brightness)
 │       └── environmental.c/h     # (placeholder / future use)
 │
@@ -125,30 +131,43 @@ Press `Ctrl+]` to exit the IDF monitor.
 
 ```
 app_main()
-  ├── Init: NVS, I2C, serial, LED, history, button, ENS210, ENS16X, Zigbee
-  ├── xTaskCreate(sensor_task)    -- reads sensors, sends JSON, logs history, pushes Zigbee
+  ├── Init: NVS, I2C, serial, LED, history, button
+  ├── device_model_detect()          -- Base vs Pro, from SCD41 / VCNL4040 presence
+  ├── ENS210 + ENS16X init (always); SCD41 + VCNL4040 init (Pro only)
+  ├── radio_mode_init()              -- reads NVS join/pairing flags, picks boot mode
+  │     ├── BLE mode (default)  ──► ble_gatt_init()   -- GATT server + BTHome advertising
+  │     └── Zigbee mode         ──► zigbee_init()     -- only if previously joined, or a pairing request is pending
+  ├── xTaskCreate(sensor_task)    -- reads sensors, sends JSON, logs history, pushes to the active radio
   ├── xTaskCreate(command_task)   -- polls for incoming serial commands
-  └── Main loop (20ms tick)       -- smooth LED color transitions based on VOC Level
+  └── Main loop (20ms tick)       -- smooth LED color transitions based on display_level (see below)
 ```
+
+Exactly one of BLE or Zigbee runs per boot -- the ESP32-H2 has a single radio, and running both
+concurrently isn't supported. See "Pairing behavior" below for how the firmware switches between them.
 
 ### Data flow
 
 ```
 ENS210 (I2C)  ──► sensor_task ──► serial JSON output (USB)
 ENS16X (I2C)  ──►      │       ├─► history_record_sample() ──► flash ring buffer
-                        │       └─► zigbee_update_sensors()  ──► Zigbee attribute reports (every 10s)
+SCD41 (I2C, Pro) ──►    │       └─► active radio:
+VCNL4040 (I2C, Pro) ──► │             ├─► zigbee_update_sensors()  ──► Zigbee attribute reports (every 10s), only in Zigbee mode
+                        │             └─► ble_gatt live-data notify ──► BLE Live Data char. / BTHome advertising, only in BLE mode
                         │
-             VOC Level value ──► main loop ──► LED color (continuous green-to-red from canonical VOC Level)
+     VOC Level, CO2 Level (Pro) ──► main loop ──► display_level = max(VOC Level, CO2 Level on Pro) ──► LED color (green-to-red)
                                                     ▲
-              Home Assistant ──► Zigbee Analog Output write ──► led_set_intensity() (brightness)
+Home Assistant / SmartThings ──► Zigbee Analog Output write ──► led_set_intensity() (brightness)
 ```
 
 ### Module overview
 
 **Sensors**
 
+- `device_model.c` -- Detects Base vs Pro hardware via `aircube_model_detect()`: Pro if either the SCD41 or VCNL4040 responds on I2C. `aircube_model_is_pro()` / `aircube_model_name()` ("base"/"pro") are used throughout the firmware (LED arbitration, Zigbee cluster gating, serial JSON, BLE device info).
 - `ens210.c` -- I2C driver for the ENS210 temperature/humidity sensor. Exposes `ens210_get_temperature()`, `ens210_get_humidity()`.
-- `ens16x_driver.c` -- I2C driver for the ENS16X air quality sensor. Reads eTVOC, eCO2, VOC Level, and AQI-UBA. Accepts environmental compensation data from the ENS210.
+- `ens16x_driver.c` -- I2C driver for the ENS16X air quality sensor. Reads eTVOC, eCO2, VOC Level, and AQI-UBA. Accepts environmental compensation data from the ENS210. `ens16x_read_aqi()` (AQI-S) is deprecated and always returns 0 -- kept only for serial JSON compatibility.
+- `scd41.c` -- I2C driver for the Sensirion SCD41 (Pro only). Provides true NDIR CO2 in ppm, plus its own temperature/humidity readings. Used for both the LED's CO2 Level and, on Pro, the history/BLE/serial CO2 field.
+- `vcnl4040.c` -- I2C driver for the Vishay VCNL4040 ambient light sensor (Pro only). Feeds `auto_dim.c` for automatic night-time LED dimming.
 
 **LED**
 
@@ -159,7 +178,9 @@ ENS16X (I2C)  ──►      │       ├─► history_record_sample() ──�
 **Communication**
 
 - `serial_protocol.c` -- JSON-over-USB serial interface. Sends periodic sensor data, accepts commands (see Serial Protocol below).
-- `zigbee.c` -- Registers a Zigbee End Device on the ESP32-H2's native 802.15.4 radio. Exposes temperature/humidity via standard ZCL clusters, eCO2/eTVOC/VOC Level via custom cluster 0xFC01, and LED brightness via the standard Analog Output cluster (0x000D).
+- `radio_mode.c` -- Chooses BLE or Zigbee at boot and manages the transition between them. Default boot mode is **BLE**, unless NVS records the device as already Zigbee-joined or a pairing request is pending. A long button press while in BLE mode sets an NVS pairing flag and reboots (`esp_restart()`) into Zigbee mode, where network steering begins and consumes the flag; a long press while already in Zigbee mode starts steering directly, with no reboot. `radio_mode_revert_to_ble()` clears the NVS flags and reboots back to BLE if steering fails/times out on a factory-new device, or if the device is removed from its Zigbee network.
+- `ble_gatt.c` -- BLE GATT server (service UUID `A17C0DE0-...`: Device Info, Live Data, History Request/Data, Brightness) plus inline BTHome v2 advertising, active only while the device is in BLE mode. See [`docs/BLE_GATT_PROTOCOL.md`](docs/BLE_GATT_PROTOCOL.md) for the full protocol.
+- `zigbee.c` -- Registers a Zigbee End Device on the ESP32-H2's native 802.15.4 radio, active only while the device is in Zigbee mode. Exposes temperature/humidity via standard ZCL clusters, eCO2/eTVOC/VOC Level via custom cluster 0xFC01, LED brightness via the standard Analog Output cluster (0x000D), and on Pro hardware, true CO2 and illuminance via standard clusters not yet exposed by any integration (see "Zigbee Integration" below).
 
 **Storage**
 
@@ -167,7 +188,7 @@ ENS16X (I2C)  ──►      │       ├─► history_record_sample() ──�
 
 **Input**
 
-- `button.c` -- GPIO debounce with short press (brightness cycle) and long press (Zigbee pairing).
+- `button.c` -- GPIO debounce with short press (brightness cycle) and long press (radio pairing, via `radio_mode_start_pairing()`).
 
 ---
 
@@ -179,12 +200,18 @@ The AirCube communicates over USB-Serial-JTAG at **115200 baud**. All messages a
 
 ```json
 {
+  "model": "pro",
   "ens210": {"status": 0, "temperature_c": 23.45, "temperature_f": 74.21, "humidity": 52.30},
-  "ens16x": {"status": "OK", "etvoc": 42, "eco2": 415, "aqi": 3, "aqi_uba": 1},
+  "ens16x": {"status": "OK", "etvoc": 42, "eco2": 415, "aqi": 3, "aqi_s": 0, "aqi_uba": 1},
+  "scd41": {"co2": 512},
+  "vcnl4040": {"lux": 84.2},
   "timestamp": 12345
 }
 ```
 
+`model` is `"base"` or `"pro"`. `aqi_s` is the deprecated AQI-S score -- `ens16x_read_aqi()` always
+returns `0` now; the field is kept only for serial JSON compatibility. `scd41.co2` and
+`vcnl4040.lux` are `0` on Base hardware (no SCD41/VCNL4040 fitted) and real readings on Pro.
 `timestamp` is milliseconds since boot.
 
 ### Commands (send to device)
@@ -239,7 +266,7 @@ Abbreviated JSON keys in `get_history` responses:
 | `t_a`, `t_n`, `t_x` | Temperature avg, min, max (x100 C) |
 | `h_a`, `h_n`, `h_x` | Humidity avg, min, max (x100 %) |
 | `q_a`, `q_n`, `q_x` | VOC Level avg, min, max |
-| `c_a`, `c_n`, `c_x` | eCO2 avg, min, max (ppm) |
+| `c_a`, `c_n`, `c_x` | CO2 avg, min, max (ppm) -- **true CO2 (SCD41) on Pro, eCO2 (ENS16X estimate) on Base** |
 | `v_a`, `v_n`, `v_x` | eTVOC avg, min, max (ppb) |
 
 ---
@@ -254,17 +281,41 @@ The ESP32-H2 has a native IEEE 802.15.4 radio. AirCube registers as a Zigbee End
 | Relative Humidity | 0x0405 | `measuredValue` (uint16, x100 %) |
 | Custom Air Quality | 0xFC01 | `eco2` (0x0000), `etvoc` (0x0001), `aqi` (0x0002) -- all uint16, read-only |
 | Analog Output | 0x000D | `presentValue` (float, 0--100) -- LED brightness, writable |
+| Carbon Dioxide Measurement | 0x040D | `measuredValue` (float, ppm) -- **Pro only**, true CO2 from the SCD41 |
+| Illuminance Measurement | 0x0400 | `measuredValue` (uint16, lux) -- **Pro only**, from the VCNL4040 |
 
 The custom cluster requires a **ZHA quirk** or **Zigbee2MQTT external converter** on the Home Assistant side. Both are included in the repo (`zha/aircube.py` and `z2m/aircube.js`). On a **Samsung SmartThings** hub, use the Edge driver in `smartthings/aircube-zigbee/` and follow [SMARTTHINGS.md](SMARTTHINGS.md).
+
+**Pro's CO2 (0x040D) and illuminance (0x0400) clusters are firmware-only today.** They're declared
+on the Zigbee endpoint, but the ZHA quirk, Z2M converter, and SmartThings Edge driver in this repo
+do not currently read them, so they won't appear as entities on any hub yet. Contributions to wire
+these up in the integrations are welcome.
 
 See [HOME_ASSISTANT.md](HOME_ASSISTANT.md) for Home Assistant setup instructions.
 
 ### Pairing behavior
 
-- On first boot, the device automatically starts network steering (searching for a coordinator).
-- A 3-second button hold triggers pairing mode at any time.
-- During pairing, the LED flashes blue at 2 Hz.
+The ESP32-H2 runs exactly one radio stack at a time -- BLE or Zigbee, never both (see "Tasks and
+main loop" above). The device boots into **BLE mode by default**, unless it's already joined to a
+Zigbee network (or a pairing request is pending) per the NVS flags read at boot.
+
+- A 3-second button hold triggers pairing mode at any time (`radio_mode_start_pairing()`).
+  - If the device is currently in **BLE mode**, this sets an NVS pairing flag and calls
+    `esp_restart()`, rebooting into Zigbee mode, where network steering begins immediately and
+    consumes the flag.
+  - If the device is already in **Zigbee mode** (previously joined), this starts network steering
+    directly -- no reboot.
+- During Zigbee pairing/steering, the LED flashes blue at 2 Hz.
 - Pairing mode times out after 60 seconds if no network is found.
+- If steering fails or times out on a factory-new device, or the device is later removed from its
+  Zigbee network, `radio_mode_revert_to_ble()` clears the NVS flags and reboots back into BLE mode.
+
+## BLE Integration
+
+When not joined to a Zigbee network, AirCube runs a BLE GATT server (`ble_gatt.c`) plus BTHome v2
+advertising, so it works with the AirCube apps or a Home Assistant Bluetooth proxy with no pairing
+step at all. See [`docs/BLE_GATT_PROTOCOL.md`](docs/BLE_GATT_PROTOCOL.md) for the full protocol
+(service/characteristic UUIDs, live data layout, history sync).
 
 ---
 

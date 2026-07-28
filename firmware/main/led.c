@@ -21,7 +21,7 @@
 
 // LED task cadence and brightness ramp timing
 #define LED_TASK_PERIOD_MS   20
-#define INTENSITY_RAMP_MS    1500   // Time to traverse full 0-100% range
+#define INTENSITY_RAMP_MS    500    // Time to traverse full 0-100% range
 
 // Mutex to protect LED color and intensity updates
 static SemaphoreHandle_t led_mutex = NULL;

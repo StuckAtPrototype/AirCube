@@ -50,21 +50,36 @@ The AirCube uses a custom Zigbee cluster (0xFC01) for air quality data and a sta
 
    > **Where do I create it?** Open the File editor and look for `configuration.yaml`. On **HA 2026.x** it's in `/homeassistant/`, on **HA 2025.x and earlier** it's in `/config/`. Create `custom_zha_quirks` in whichever folder contains your `configuration.yaml`. **Do not** create a new folder called `config` -- just put `custom_zha_quirks` directly alongside `configuration.yaml`.
 
-4. Inside `custom_zha_quirks`, create a new file called **`aircube.py`** and paste this content:
+4. Inside `custom_zha_quirks`, create a new file called **`aircube.py`** and paste this content.
+   This is kept in sync with [`zha/aircube.py`](zha/aircube.py) in this repo -- if you'd rather not
+   copy/paste, you can grab the file directly from there instead.
 
 ```python
-"""StuckAtPrototype AirCube air quality monitor quirk for ZHA."""
+"""StuckAtPrototype AirCube air quality monitor quirk for ZHA.
+
+This single file is compatible with both old and new Home Assistant:
+
+  * Modern HA (zigpy >= 0.65.1, i.e. HA >= ~2024.8):
+        Full quirks v2 support. Exposes eCO2, tVOC and AQI sensors from the
+        custom 0xFC01 cluster plus a Brightness number on the Analog Output
+        cluster.
+
+  * Old HA (zigpy < 0.65, e.g. HA 2024.1.x):
+        `zigpy.quirks.v2` does not exist yet, so importing QuirkBuilder raises
+        ImportError and the whole quirk fails to load. We fall back to a classic
+        v1 quirk so the module imports cleanly and the device is named correctly.
+
+        IMPORTANT: on these old ZHA versions there is no supported way to turn
+        custom-cluster (0xFC01) attributes into entities -- eCO2/tVOC/AQI will
+        NOT appear until HA is updated to a version with quirks v2, or the values
+        are read over BLE via the firmware's BTHome broadcaster. Temperature,
+        humidity and brightness still work on old HA because they use standard
+        Zigbee clusters and are discovered automatically.
+"""
 
 from zigpy.quirks import CustomCluster
-from zigpy.quirks.v2 import QuirkBuilder
-from zigpy.quirks.v2.homeassistant import EntityType
 from zigpy.zcl.foundation import ZCLAttributeDef
 import zigpy.types as t
-
-try:
-    from zigpy.quirks.v2.homeassistant.sensor import SensorDeviceClass, SensorStateClass
-except ImportError:
-    from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 
 
 class AirQualityCluster(CustomCluster):
@@ -88,49 +103,145 @@ class AirQualityCluster(CustomCluster):
 
 ANALOG_OUTPUT_CLUSTER_ID = 0x000D
 
-(
-    QuirkBuilder("StuckAtPrototype", "AirCube")
-    .replaces(AirQualityCluster, endpoint_id=10)
-    .sensor(
-        AirQualityCluster.AttributeDefs.eco2.name,
-        AirQualityCluster.cluster_id,
-        endpoint_id=10,
-        unit="ppm",
-        translation_key="equivalent_co2",
-        state_class=SensorStateClass.MEASUREMENT,
-        fallback_name="Equivalent CO2",
+
+# ---------------------------------------------------------------------------
+# Detect whether this HA/zigpy version supports the quirks v2 API.
+# ---------------------------------------------------------------------------
+try:
+    from zigpy.quirks.v2 import QuirkBuilder
+    from zigpy.quirks.v2.homeassistant import EntityType
+
+    try:
+        from zigpy.quirks.v2.homeassistant.sensor import (
+            SensorDeviceClass,
+            SensorStateClass,
+        )
+    except ImportError:
+        from homeassistant.components.sensor import (
+            SensorDeviceClass,
+            SensorStateClass,
+        )
+
+    _HAS_QUIRKS_V2 = True
+except ImportError:
+    _HAS_QUIRKS_V2 = False
+
+
+if _HAS_QUIRKS_V2:
+    # -----------------------------------------------------------------------
+    # Modern HA: full quirks v2 definition.
+    # -----------------------------------------------------------------------
+    (
+        QuirkBuilder("StuckAtPrototype", "AirCube")
+        .replaces(AirQualityCluster, endpoint_id=10)
+        .sensor(
+            AirQualityCluster.AttributeDefs.eco2.name,
+            AirQualityCluster.cluster_id,
+            endpoint_id=10,
+            unit="ppm",
+            translation_key="equivalent_co2",
+            state_class=SensorStateClass.MEASUREMENT,
+            fallback_name="Equivalent CO2",
+        )
+        .sensor(
+            AirQualityCluster.AttributeDefs.etvoc.name,
+            AirQualityCluster.cluster_id,
+            endpoint_id=10,
+            unit="ppb",
+            device_class=SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS,
+            state_class=SensorStateClass.MEASUREMENT,
+            fallback_name="tVOC",
+        )
+        .sensor(
+            AirQualityCluster.AttributeDefs.aqi.name,
+            AirQualityCluster.cluster_id,
+            endpoint_id=10,
+            state_class=SensorStateClass.MEASUREMENT,
+            translation_key="voc_level",
+            fallback_name="VOC Level",
+        )
+        .number(
+            "present_value",
+            ANALOG_OUTPUT_CLUSTER_ID,
+            endpoint_id=10,
+            min_value=0,
+            max_value=100,
+            step=1,
+            mode="slider",
+            entity_type=EntityType.STANDARD,
+            translation_key="brightness",
+            fallback_name="Brightness",
+        )
+        .add_to_registry()
     )
-    .sensor(
-        AirQualityCluster.AttributeDefs.etvoc.name,
-        AirQualityCluster.cluster_id,
-        endpoint_id=10,
-        unit="ppb",
-        device_class=SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS,
-        state_class=SensorStateClass.MEASUREMENT,
-        fallback_name="tVOC",
+else:
+    # -----------------------------------------------------------------------
+    # Old HA (no quirks v2): classic v1 fallback.
+    #
+    # This keeps the module importable (stops the ImportError crash) and names
+    # the device. Temperature, humidity and brightness are exposed by ZHA's
+    # standard discovery. The eCO2/tVOC/AQI values on cluster 0xFC01 cannot be
+    # surfaced as entities on this ZHA version -- update HA, or read them over
+    # BLE (BTHome), for those.
+    # -----------------------------------------------------------------------
+    from zigpy.quirks import CustomDevice
+    from zigpy.profiles import zha
+    from zigpy.zcl.clusters.general import AnalogOutput, Basic, Identify
+    from zigpy.zcl.clusters.measurement import (
+        RelativeHumidity,
+        TemperatureMeasurement,
     )
-    .sensor(
-        AirQualityCluster.AttributeDefs.aqi.name,
-        AirQualityCluster.cluster_id,
-        endpoint_id=10,
-        device_class=SensorDeviceClass.AQI,
-        state_class=SensorStateClass.MEASUREMENT,
-        fallback_name="VOC Level (TVOC)",
+    from zhaquirks.const import (
+        DEVICE_TYPE,
+        ENDPOINTS,
+        INPUT_CLUSTERS,
+        MODELS_INFO,
+        OUTPUT_CLUSTERS,
+        PROFILE_ID,
     )
-    .number(
-        "present_value",
-        ANALOG_OUTPUT_CLUSTER_ID,
-        endpoint_id=10,
-        min_value=0,
-        max_value=100,
-        step=1,
-        mode="slider",
-        entity_type=EntityType.STANDARD,
-        translation_key="brightness",
-        fallback_name="Brightness",
-    )
-    .add_to_registry()
-)
+
+    class AirCube(CustomDevice):
+        """AirCube v1 quirk for HA versions without quirks v2."""
+
+        signature = {
+            MODELS_INFO: [("StuckAtPrototype", "AirCube")],
+            ENDPOINTS: {
+                # <SimpleDescriptor endpoint=10 profile=260 device_type=770
+                #  input_clusters=[0, 3, 13, 1026, 1029, 64513]
+                #  output_clusters=[]>
+                10: {
+                    PROFILE_ID: zha.PROFILE_ID,
+                    DEVICE_TYPE: zha.DeviceType.TEMPERATURE_SENSOR,
+                    INPUT_CLUSTERS: [
+                        Basic.cluster_id,
+                        Identify.cluster_id,
+                        AnalogOutput.cluster_id,
+                        TemperatureMeasurement.cluster_id,
+                        RelativeHumidity.cluster_id,
+                        AirQualityCluster.cluster_id,
+                    ],
+                    OUTPUT_CLUSTERS: [],
+                },
+            },
+        }
+
+        replacement = {
+            ENDPOINTS: {
+                10: {
+                    PROFILE_ID: zha.PROFILE_ID,
+                    DEVICE_TYPE: zha.DeviceType.TEMPERATURE_SENSOR,
+                    INPUT_CLUSTERS: [
+                        Basic,
+                        Identify,
+                        AnalogOutput,
+                        TemperatureMeasurement,
+                        RelativeHumidity,
+                        AirQualityCluster,
+                    ],
+                    OUTPUT_CLUSTERS: [],
+                },
+            },
+        }
 ```
 
 5. Open your main **`configuration.yaml`** (in `/config/`) and add:
@@ -152,13 +263,10 @@ ANALOG_OUTPUT_CLUSTER_ID = 0x000D
 
 1. Go to **Settings > Devices & Services > ZHA**.
 2. Click **Add Device**.
-3. **Plug in your AirCube** via USB-C. On first power-up, it automatically enters pairing mode.
-
-   > **Already plugged in?** Hold the button on the AirCube for **3 seconds**. The LEDs will start flashing blue.
-
-4. Wait 10-30 seconds. The AirCube will appear in ZHA. Give it a name like `AirCube Living Room`.
-
-5. When the LEDs stop flashing blue and return to a steady color, pairing is complete.
+3. **Plug in your AirCube** via USB-C. It boots into BLE mode by default -- Zigbee pairing is not automatic.
+4. **Hold the button on the AirCube for 3 seconds.** The LEDs will start flashing blue, and the device reboots into Zigbee mode to begin network steering.
+5. Wait 10-30 seconds. The AirCube will appear in ZHA. Give it a name like `AirCube Living Room`.
+6. When the LEDs stop flashing blue and return to a steady color, pairing is complete.
 
 ## A4 -- Verify Sensors
 
@@ -170,7 +278,7 @@ Go to **Settings > Devices & Services > ZHA** and click on the AirCube device. Y
 | Humidity | Relative humidity | % |
 | Equivalent CO2 | eCO2 concentration (estimated) | ppm |
 | tVOC | eTVOC concentration | ppb |
-| VOC Level (TVOC) | TVOC-derived VOC Level (0--500) | -- |
+| VOC Level | TVOC-derived VOC Level (0--500) | -- |
 | Brightness | LED brightness (slider) | 0--100 |
 
 > Temperature and humidity are detected automatically by ZHA. eCO2, eTVOC, and VOC Level come from the custom quirk. The brightness slider uses the standard Analog Output cluster.
@@ -273,7 +381,7 @@ Edit your dashboard, click **Add Card**, choose **Entities**, and select:
 - AirCube Humidity
 - AirCube Equivalent CO2
 - AirCube tVOC
-- AirCube VOC Level (TVOC)
+- AirCube VOC Level
 - AirCube Brightness
 
 ### VOC Level Gauge
@@ -282,7 +390,7 @@ Add a **Manual card** and paste:
 
 ```yaml
 type: gauge
-entity: sensor.aircube_living_room_air_quality_index
+entity: sensor.aircube_living_room_voc_level
 name: Air Quality
 min: 0
 max: 500
@@ -301,7 +409,7 @@ hours_to_show: 24
 entities:
   - entity: sensor.aircube_living_room_temperature
   - entity: sensor.aircube_living_room_humidity
-  - entity: sensor.aircube_living_room_air_quality_index
+  - entity: sensor.aircube_living_room_voc_level
 ```
 
 > Entity names depend on what you named the device. Check **Settings > Devices & Services** for the exact entity IDs.

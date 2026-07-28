@@ -33,12 +33,25 @@ static const char *TAG = "main";
 static uint32_t sensor_readout_period_ms = 1000;
 static SemaphoreHandle_t readout_period_mutex = NULL;
 
-// LED color mapping: continuous green->red gradient from canonical VOC Level (TVOC-derived).
+// LED color mapping: continuous green->red gradient from whichever of
+// VOC Level / CO2 Level is currently worse (Pro); VOC Level only (Base).
 #define AQI_MIN 0
 #define AQI_MAX 200
 #define AQI_GREEN_THRESHOLD 10  // Values 0-10 are pure green
 
 #define HUE_GREEN  21845  // 120 deg - pure green
+
+// Shared 0-500 severity checkpoints. Both the VOC and CO2 threshold tables
+// below map their raw units onto these same bands, so the two resulting
+// levels are directly comparable (see co2_calculate()/aqi_calculate()).
+static const uint16_t AQI_LEVEL_BANDS[6] = {
+    0,    // Level 0
+    15,   // Level 1 - Excellent / Good edge
+    50,   // Level 2 - Good / Moderate edge
+    100,  // Level 3 - Moderate / Poor edge
+    200,  // Level 4 - Poor / Unhealthy edge
+    500   // Level 5 - Unhealthy cap
+};
 
 // VOC Level values at each TVOC band edge (matches published VOC table):
 //   0-65 ppb      -> VOC Level 0-15   (Excellent)
@@ -48,17 +61,19 @@ static SemaphoreHandle_t readout_period_mutex = NULL;
 //   2200-5500 ppb -> VOC Level 200-500 (Unhealthy)
 // Driven by TVOC alone; eCO2 is reported separately as raw ppm.
 static const int AQI_TVOC_THRESHOLDS_PPB[5] = { 65, 220, 650, 2200, 5500 };
-static const uint16_t BAND_AQI_TVOC[6] = {
-    0,    // Level 0 - 0 ppb
-    15,   // Level 1 - Excellent / Good edge   (65 ppb)
-    50,   // Level 2 - Good / Moderate edge    (220 ppb)
-    100,  // Level 3 - Moderate / Poor edge    (650 ppb)
-    200,  // Level 4 - Poor / Unhealthy edge   (2200 ppb)
-    500   // Level 5 - Unhealthy cap           (5500 ppb)
-};
 
-// Canonical VOC Level (TVOC-derived) for LED color mapping
-static int current_aqi = 0;
+// CO2 ppm bands -> CO2 Level (EN 16798-1-style indoor-air categories),
+// Pro hardware (SCD41) only:
+//   800-1000 ppm   -> CO2 Level 15-50   (Cat I/II edge)
+//   1000-1500 ppm  -> CO2 Level 50-100  (Cat II/III edge)
+//   1500-2000 ppm  -> CO2 Level 100-200 (Cat III/IV edge)
+//   2000-5000 ppm  -> CO2 Level 200-500 (unhealthy -> OSHA 8h TWA cap)
+static const int AQI_CO2_THRESHOLDS_PPM[5] = { 800, 1000, 1500, 2000, 5000 };
+
+// Canonical VOC Level (TVOC-derived) and CO2 Level (SCD41-derived, Pro only)
+// for LED color mapping. The LED loop picks whichever is worse each tick.
+static int current_voc_level = 0;
+static int current_co2_level = 0;  // Pro only; 0 (best) until SCD41 has data
 
 // Static variables for smooth LED color transitions
 static float current_hue = 21845.0f;  // Current hue value (21845 = green, 0 = red) - using float for smooth transitions
@@ -126,25 +141,26 @@ static uint16_t aqi_to_hue(int aqi)
 }
 
 /**
- * @brief Map TVOC ppb to a continuous VOC Level position 0.0..5.0
+ * @brief Map a raw sensor value to a continuous band position 0.0..5.0
  *
- * Uses AQI_TVOC_THRESHOLDS_PPB (65, 220, 650, 2200, 5500 ppb).
+ * Generic across sources: interpolates `value` against a 5-point threshold
+ * table (ppb for VOC, ppm for CO2) whose edges correspond to band 1..5.
  */
-static float aqi_tvoc_to_level_pos(int value)
+static float value_to_level_pos(int value, const int thresholds[5])
 {
     if (value <= 0) {
         return 0.0f;
     }
-    if (value >= AQI_TVOC_THRESHOLDS_PPB[4]) {
+    if (value >= thresholds[4]) {
         return 5.0f;
     }
-    if (value < AQI_TVOC_THRESHOLDS_PPB[0]) {
-        return (float)value / (float)AQI_TVOC_THRESHOLDS_PPB[0];
+    if (value < thresholds[0]) {
+        return (float)value / (float)thresholds[0];
     }
     for (int i = 0; i < 4; i++) {
-        if (value < AQI_TVOC_THRESHOLDS_PPB[i + 1]) {
-            float span = (float)(AQI_TVOC_THRESHOLDS_PPB[i + 1] - AQI_TVOC_THRESHOLDS_PPB[i]);
-            float frac = (float)(value - AQI_TVOC_THRESHOLDS_PPB[i]) / span;
+        if (value < thresholds[i + 1]) {
+            float span = (float)(thresholds[i + 1] - thresholds[i]);
+            float frac = (float)(value - thresholds[i]) / span;
             return (float)(i + 1) + frac;
         }
     }
@@ -152,23 +168,24 @@ static float aqi_tvoc_to_level_pos(int value)
 }
 
 /**
- * @brief Compute the canonical AirCube VOC Level from TVOC.
+ * @brief Map a raw sensor value to a 0-500 severity level via a threshold table.
  *
- * Maps TVOC ppb to VOC Level 0-500 using fixed indoor-air bands (see BAND_AQI_TVOC).
- * TVOC-only; eCO2 is reported separately. LED color follows this VOC Level via
- * aqi_to_hue() (green at 0-10, gradient to red at 200+).
+ * Shared by aqi_calculate() (VOC, TVOC ppb) and co2_calculate() (CO2 ppm) so
+ * both land on the same 0-500 scale and are directly comparable.
  *
- * @param etvoc Equivalent TVOC in ppb
- * @return VOC Level value in [0, 500]
+ * @param value Raw sensor value (ppb or ppm)
+ * @param thresholds 5-point band-edge table, in the same units as `value`
+ * @param bands 6-point Level table (see AQI_LEVEL_BANDS)
+ * @return Severity level in [0, 500]
  */
-static uint16_t aqi_calculate(int etvoc)
+static uint16_t level_from_thresholds(int value, const int thresholds[5], const uint16_t bands[6])
 {
-    float pos = aqi_tvoc_to_level_pos(etvoc);
+    float pos = value_to_level_pos(value, thresholds);
     if (pos <= 0.0f) {
-        return BAND_AQI_TVOC[0];
+        return bands[0];
     }
     if (pos >= 5.0f) {
-        return BAND_AQI_TVOC[5];
+        return bands[5];
     }
 
     int low = (int)pos;
@@ -177,17 +194,47 @@ static uint16_t aqi_calculate(int etvoc)
     }
     float frac = pos - (float)low;
 
-    int32_t a_low  = (int32_t)BAND_AQI_TVOC[low];
-    int32_t a_high = (int32_t)BAND_AQI_TVOC[low + 1];
-    int32_t aqi = a_low + (int32_t)((a_high - a_low) * frac);
+    int32_t a_low  = (int32_t)bands[low];
+    int32_t a_high = (int32_t)bands[low + 1];
+    int32_t level = a_low + (int32_t)((a_high - a_low) * frac);
 
-    if (aqi < 0) {
-        aqi = 0;
+    if (level < 0) {
+        level = 0;
     }
-    if (aqi > 500) {
-        aqi = 500;
+    if (level > 500) {
+        level = 500;
     }
-    return (uint16_t)aqi;
+    return (uint16_t)level;
+}
+
+/**
+ * @brief Compute the canonical AirCube VOC Level from TVOC.
+ *
+ * Maps TVOC ppb to VOC Level 0-500 using fixed indoor-air bands (see AQI_LEVEL_BANDS).
+ * TVOC-only; eCO2 is reported separately. LED color follows this VOC Level via
+ * aqi_to_hue() (green at 0-10, gradient to red at 200+).
+ *
+ * @param etvoc Equivalent TVOC in ppb
+ * @return VOC Level value in [0, 500]
+ */
+static uint16_t aqi_calculate(int etvoc)
+{
+    return level_from_thresholds(etvoc, AQI_TVOC_THRESHOLDS_PPB, AQI_LEVEL_BANDS);
+}
+
+/**
+ * @brief Compute the AirCube CO2 Level from true (SCD41) CO2 ppm. Pro only.
+ *
+ * Maps CO2 ppm to CO2 Level 0-500 using EN 16798-1-style bands (see
+ * AQI_CO2_THRESHOLDS_PPM), on the same 0-500 scale as VOC Level so the LED
+ * loop can directly compare the two and show whichever is worse.
+ *
+ * @param co2_ppm True CO2 in ppm
+ * @return CO2 Level value in [0, 500]
+ */
+static uint16_t co2_calculate(int co2_ppm)
+{
+    return level_from_thresholds(co2_ppm, AQI_CO2_THRESHOLDS_PPM, AQI_LEVEL_BANDS);
 }
 
 /**
@@ -330,6 +377,12 @@ void sensor_task(void *pvParameters)
             if (scd41_has_data()) {
                 compose_ens16x_compensation(temp_c, humidity, comp_t, comp_h);
                 ens16x_write_ens210_data(comp_t, comp_h);
+
+                // True CO2 in, for the LED's worst-of-VOC/CO2 arbitration below.
+                // Gated on scd41_has_data(), same as the compensation write
+                // above, so it only reflects a real reading rather than the
+                // transient 0 ppm seen during the ~5s SCD41 warm-up.
+                current_co2_level = co2_calculate((int)co2_ppm);
             }
         } else {
             // Base: ENS210 temperature and humidity.
@@ -357,7 +410,7 @@ void sensor_task(void *pvParameters)
         int aqi_uba = ens16x_read_aqi_uba();
         enum ENS_STATUS ens16x_status = ens16x_get_status();
 
-        current_aqi = aqi;
+        current_voc_level = aqi;
         
         // Helper function to convert ENS16X status to string
         const char* ens16x_status_str;
@@ -579,11 +632,28 @@ void app_main(void)
             continue;   // Skip normal VOC Level color while pairing
         }
         
-        // ── Normal mode: continuous green->red from canonical VOC Level ──
-        if (current_aqi >= AQI_MAX) {
-            target_hue = 0;  // Red for high VOC Level
+        // ── Normal mode: continuous green->red from whichever is worse ──
+        // VOC and CO2 are scored independently on the same 0-500 scale; the
+        // worse of the two (never a blend of both) drives the color. CO2 is
+        // only considered on Pro hardware (current_co2_level stays 0 on Base).
+        int display_level = current_voc_level;
+        bool co2_is_worse = false;
+        if (aircube_model_is_pro() && current_co2_level > display_level) {
+            display_level = current_co2_level;
+            co2_is_worse = true;
+        }
+
+        static bool was_co2_worse = false;
+        if (co2_is_worse != was_co2_worse) {
+            ESP_LOGI(TAG, "LED now driven by %s Level (VOC %d, CO2 %d)",
+                     co2_is_worse ? "CO2" : "VOC", current_voc_level, current_co2_level);
+            was_co2_worse = co2_is_worse;
+        }
+
+        if (display_level >= AQI_MAX) {
+            target_hue = 0;  // Red for high severity
         } else {
-            target_hue = aqi_to_hue(current_aqi);
+            target_hue = aqi_to_hue(display_level);
         }
         
         // Smoothly transition current_hue towards target_hue
