@@ -32,7 +32,20 @@ static const char *TAG = "vcnl4040";
 #define VCNL4040_LUX_CAL_GAIN 2.336f
 
 // LED spill into the ALS at fixed brightness steps (lux above LED-off baseline).
-// Measured with reference meter held constant: 0%=54, 25%=57, 50%=61, 75%=64, 100%=68 lx.
+//
+// Re-measured on hardware after the original 0/3/7/10/14 lx table was found to
+// over-subtract badly: stepping the LED between 100% and 10% moved the raw ALS
+// reading by ~3 lx, not the ~12.8 lx that table implied. Subtracting the old
+// values dragged a steady 13.6 lx room down to 2.8 lx whenever the LED was
+// bright, which was enough to drive auto-dim into a permanent day/night cycle.
+//
+// These figures were taken at the mid-gradient (amber) LED colour. Spill scales
+// with how much light the ALS actually sees, so a green cube spills more than a
+// red one at the same intensity; a single intensity-indexed curve cannot capture
+// that. Erring low is deliberate - under-subtracting biases toward reporting
+// more ambient light, which keeps the LED bright rather than latching it dim.
+#define VCNL4040_MAX_LED_SPILL_LUX 3.3f
+
 typedef struct {
     float pct;
     float spill_lux;
@@ -40,10 +53,10 @@ typedef struct {
 
 static const lux_led_spill_point_t LUX_LED_SPILL_TABLE[] = {
     {0.f, 0.f},
-    {25.f, 3.f},
-    {50.f, 7.f},
-    {75.f, 10.f},
-    {100.f, 14.f},
+    {25.f, 0.8f},
+    {50.f, 1.7f},
+    {75.f, 2.5f},
+    {100.f, VCNL4040_MAX_LED_SPILL_LUX},
 };
 
 static float lux_led_spill_for_intensity_pct(float pct)
@@ -68,6 +81,12 @@ static float lux_led_spill_for_intensity_pct(float pct)
     }
 
     return 0.f;
+}
+
+float vcnl4040_max_led_spill_lux(void)
+{
+    const size_t count = sizeof(LUX_LED_SPILL_TABLE) / sizeof(LUX_LED_SPILL_TABLE[0]);
+    return LUX_LED_SPILL_TABLE[count - 1].spill_lux;
 }
 
 static float lux_apply_led_compensation(float lux)
