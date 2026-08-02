@@ -15,7 +15,7 @@
  *   0x0002 = aqi   (uint16, TVOC-derived VOC Level, 0-500)
  */
 
-import {temperature, humidity} from 'zigbee-herdsman-converters/lib/modernExtend';
+import {temperature, humidity, illuminance, co2} from 'zigbee-herdsman-converters/lib/modernExtend';
 import * as exposes from 'zigbee-herdsman-converters/lib/exposes';
 
 const e = exposes.presets;
@@ -75,6 +75,8 @@ const definition = {
     extend: [
         temperature(),
         humidity(),
+        illuminance(),
+        co2(),
     ],
     fromZigbee: [fzAirCubeAirQuality, fzBrightness],
     toZigbee: [tzBrightness],
@@ -104,6 +106,8 @@ const definition = {
         const endpoint = device.getEndpoint(10);
         await endpoint.bind('msTemperatureMeasurement', coordinatorEndpoint);
         await endpoint.bind('msRelativeHumidity', coordinatorEndpoint);
+        await endpoint.bind('msIlluminanceMeasurement', coordinatorEndpoint);
+        await endpoint.bind('msCO2', coordinatorEndpoint);
         await endpoint.configureReporting('msTemperatureMeasurement', [{
             attribute: 'measuredValue', minimumReportInterval: 1,
             maximumReportInterval: 60, reportableChange: 50,
@@ -112,6 +116,14 @@ const definition = {
             attribute: 'measuredValue', minimumReportInterval: 1,
             maximumReportInterval: 60, reportableChange: 100,
         }]);
+        await endpoint.configureReporting('msIlluminanceMeasurement', [{
+            attribute: 'measuredValue', minimumReportInterval: 1,
+            maximumReportInterval: 60, reportableChange: 10,
+        }]);
+        await endpoint.configureReporting('msCO2', [{
+            attribute: 'measuredValue', minimumReportInterval: 1,
+            maximumReportInterval: 60, reportableChange: 5,
+        }]); 
         await endpoint.bind('genAnalogOutput', coordinatorEndpoint);
         await endpoint.configureReporting('genAnalogOutput', [{
             attribute: 'presentValue', minimumReportInterval: 1,
