@@ -59,7 +59,10 @@ AirCube/
 │   ├── gerbers/                    # Manufacturing files
 │   └── AirCube v1.0 BOM.csv       # Bill of materials
 │
-├── mechanical/            # 3D-printable enclosure (STEP files)
+├── mechanical/            # 3D-printable enclosure
+│   ├── base/              # Base shells + air wall (STEP, 3MF)
+│   ├── pro/               # Pro shells, air wall, light wall, button (STEP, STL)
+│   └── guide_images/      # Photos used by ASSEMBLY.md
 │
 ├── zha/                   # Home Assistant ZHA quirk
 │   └── aircube.py
@@ -77,6 +80,7 @@ AirCube/
 │       └── src/
 │
 ├── README.md              # Customer-facing product page
+├── ASSEMBLY.md            # Enclosure assembly guide (Base and Pro)
 ├── HOME_ASSISTANT.md      # Home Assistant integration guide
 ├── SMARTTHINGS.md         # SmartThings hub + CLI integration guide
 ├── CONTRIBUTING.md        # This file
@@ -379,7 +383,9 @@ KiCad project files are in `kicad/`. Includes schematic, layout, Gerber files fo
 
 ### Enclosure
 
-3D-printable STEP files in `mechanical/`. Top and bottom halves snap together.
+3D-printable files in `mechanical/`, split by model: `mechanical/base/` (bottom, top, air wall) and `mechanical/pro/` (bottom, top, air wall, light wall, button cap). Top and bottom halves snap together and are held by three M2 x 5 mm self-tapping screws.
+
+Step-by-step build instructions with photos: **[ASSEMBLY.md](ASSEMBLY.md)**.
 
 ---
 

@@ -165,6 +165,16 @@ Latest release: [GitHub Releases](https://github.com/StuckAtPrototype/AirCube/re
 
 ---
 
+## Assembling Your AirCube
+
+Building one yourself from printed parts and a populated PCB? All you need is three M2 x 5 mm screws and a small Phillips screwdriver -- about ten minutes of work.
+
+**[Assembly Guide](ASSEMBLY.md)** -- photo walkthrough for both Base and Pro.
+
+Printable enclosure files live in [`mechanical/base/`](mechanical/base) and [`mechanical/pro/`](mechanical/pro).
+
+---
+
 ## LED Reference
 
 ### Firmware 1.5.0 and above (current)
@@ -248,6 +258,7 @@ AirCube is fully open source -- firmware, PCB design, enclosure, desktop softwar
 | | |
 |---|---|
 | [Contributing Guide](CONTRIBUTING.md) | Build from source, firmware architecture, serial protocol, how to contribute |
+| [Assembly Guide](ASSEMBLY.md) | Assemble the printed enclosure -- Base and Pro |
 | [BLE GATT Protocol](docs/BLE_GATT_PROTOCOL.md) | BLE GATT protocol reference for building custom BLE clients |
 | [Firmware Update Guide](FIRMWARE_UPDATE.md) | Update your AirCube firmware from a browser |
 | [Home Assistant Guide](HOME_ASSISTANT.md) | ZHA and Zigbee2MQTT setup |

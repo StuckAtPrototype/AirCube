@@ -6,7 +6,9 @@
 #include "button.h"
 #include "device_model.h"
 #include "led.h"
+#include "vcnl4040.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nvs.h"
 #include <string.h>
 
@@ -19,10 +21,28 @@ static const char *TAG = "auto_dim";
 #define NVS_KEY_NIGHT_DIM_PCT   "ad_night_pct"
 #define NVS_KEY_LUX_SAMPLES     "ad_lux_smpl"
 
-#define DEFAULT_NIGHT_ENTER_LUX 3.0f
-#define DEFAULT_DAY_EXIT_LUX    12.0f
+#define DEFAULT_NIGHT_ENTER_LUX 2.0f
+#define DEFAULT_DAY_EXIT_LUX    10.0f
 #define DEFAULT_NIGHT_DIM_PCT   10
 #define DEFAULT_LUX_SAMPLES     3
+
+// The lux we threshold on has the LED's own spill subtracted from it, and that
+// subtraction is larger at high brightness than at low. Dimming therefore lifts
+// the next reading by up to the full spill range. If the day/night band is
+// narrower than that lift, going night raises the reading back above the day
+// threshold, going day drops it below the night threshold, and the state
+// oscillates forever. Keeping the band wider than the largest possible
+// subtraction makes that impossible no matter how inaccurate the spill table is.
+#define BAND_MARGIN_LUX 2.0f
+
+// Discard lux samples for this long after a brightness change. The LED ramp
+// (500 ms) and the ALS integration window (640 ms) both have to clear before a
+// reading describes ambient light rather than the transition itself.
+#define SETTLE_MS 3000
+
+// Floor on how often day/night may flip, so any residual error shows up as a
+// slow correction instead of visible flicker.
+#define MIN_DWELL_MS 30000
 
 static auto_dim_config_t s_config = {
     .enabled = true,
@@ -36,10 +56,31 @@ static bool s_is_night = false;
 static int  s_effective_pct = 0;
 static int  s_night_streak = 0;
 static int  s_day_streak = 0;
+static int64_t s_last_brightness_change_us = 0;
+static int64_t s_last_transition_us = 0;
 
 static bool auto_dim_active(void)
 {
     return aircube_model_is_pro() && s_config.enabled;
+}
+
+static float min_day_exit_lux(float night_enter_lux)
+{
+    return night_enter_lux + vcnl4040_max_led_spill_lux() + BAND_MARGIN_LUX;
+}
+
+// Widen the band if needed so the thresholds cannot be crossed by the LED
+// spill compensation reacting to our own brightness change.
+static bool enforce_stable_band(auto_dim_config_t *config)
+{
+    float min_exit = min_day_exit_lux(config->night_enter_lux);
+    if (config->day_exit_lux < min_exit) {
+        ESP_LOGW(TAG, "day_exit %.1f lux too close to night_enter %.1f lux; raised to %.1f",
+                 config->day_exit_lux, config->night_enter_lux, min_exit);
+        config->day_exit_lux = min_exit;
+        return true;
+    }
+    return false;
 }
 
 static bool save_config_to_nvs(void)
@@ -154,6 +195,7 @@ static void apply_effective_if_changed(int effective_pct)
     }
 
     s_effective_pct = effective_pct;
+    s_last_brightness_change_us = esp_timer_get_time();
     led_set_intensity((float)effective_pct / 100.0f);
     ESP_LOGI(TAG, "Effective brightness %d%% (configured %d%%, night=%d)",
              s_effective_pct, button_get_brightness_percent(), s_is_night);
@@ -163,19 +205,30 @@ void auto_dim_init(void)
 {
     load_config_from_nvs();
 
-    // Migrate prior defaults to current thresholds (night < 3 lx, day > 12 lx).
+    // Migrate prior defaults to current thresholds (night < 2 lx, day > 10 lx).
+    // The 2/18 pair came from the interim fix that widened the band to survive
+    // the old over-stated LED spill figures; with those corrected it only served
+    // to strand the device in night mode.
     if ((s_config.night_enter_lux == 15.0f && s_config.day_exit_lux == 30.0f) ||
         (s_config.night_enter_lux == 12.0f && s_config.day_exit_lux == 20.0f) ||
         (s_config.night_enter_lux == 8.0f && s_config.day_exit_lux == 12.0f) ||
         (s_config.night_enter_lux == 4.0f && s_config.day_exit_lux == 10.0f) ||
         (s_config.night_enter_lux == 10.0f && s_config.day_exit_lux == 15.0f) ||
-        (s_config.night_enter_lux == 5.0f && s_config.day_exit_lux == 15.0f)) {
+        (s_config.night_enter_lux == 5.0f && s_config.day_exit_lux == 15.0f) ||
+        (s_config.night_enter_lux == 3.0f && s_config.day_exit_lux == 12.0f) ||
+        (s_config.night_enter_lux == 2.0f && s_config.day_exit_lux == 18.0f)) {
         s_config.night_enter_lux = DEFAULT_NIGHT_ENTER_LUX;
         s_config.day_exit_lux = DEFAULT_DAY_EXIT_LUX;
         save_config_to_nvs();
     }
     if (s_config.lux_sample_count == 1) {
         s_config.lux_sample_count = DEFAULT_LUX_SAMPLES;
+        save_config_to_nvs();
+    }
+
+    // Custom thresholds stored before the band invariant existed can still be
+    // narrow enough to oscillate.
+    if (enforce_stable_band(&s_config)) {
         save_config_to_nvs();
     }
 
@@ -187,6 +240,9 @@ void auto_dim_init(void)
     s_night_streak = 0;
     s_day_streak = 0;
     s_effective_pct = -1;
+    s_last_brightness_change_us = 0;
+    // Backdate so the first genuine transition isn't held off by the dwell floor.
+    s_last_transition_us = -(int64_t)MIN_DWELL_MS * 1000;
 
     ESP_LOGI(TAG, "Auto-dim %s (night<%.1f lux, day>%.1f lux, night_dim=%d%%)",
              s_config.enabled ? "enabled" : "disabled",
@@ -201,23 +257,34 @@ void auto_dim_update_lux(float lux)
         return;
     }
 
+    int64_t now = esp_timer_get_time();
+
+    // A sample taken while the LED is still ramping, or one whose integration
+    // window predates the change, describes the transition rather than the room.
+    if (now - s_last_brightness_change_us < (int64_t)SETTLE_MS * 1000) {
+        s_night_streak = 0;
+        s_day_streak = 0;
+        return;
+    }
+
     int samples = s_config.lux_sample_count;
     if (samples < 1) {
         samples = 1;
     }
 
+    bool may_transition = (now - s_last_transition_us) >= (int64_t)MIN_DWELL_MS * 1000;
     bool prev_night = s_is_night;
 
     if (lux < s_config.night_enter_lux) {
         s_night_streak++;
         s_day_streak = 0;
-        if (s_night_streak >= samples) {
+        if (s_night_streak >= samples && may_transition) {
             s_is_night = true;
         }
     } else if (lux > s_config.day_exit_lux) {
         s_day_streak++;
         s_night_streak = 0;
-        if (s_day_streak >= samples) {
+        if (s_day_streak >= samples && may_transition) {
             s_is_night = false;
         }
     } else {
@@ -226,6 +293,7 @@ void auto_dim_update_lux(float lux)
     }
 
     if (prev_night != s_is_night) {
+        s_last_transition_us = now;
         ESP_LOGI(TAG, "Day/night transition -> %s (lux=%.1f)",
                  s_is_night ? "night" : "day", lux);
         auto_dim_recompute();
@@ -284,9 +352,7 @@ void auto_dim_set_config(const auto_dim_config_t *config)
     if (s_config.night_dim_pct > 100) s_config.night_dim_pct = 100;
     if (s_config.lux_sample_count < 1)  s_config.lux_sample_count = 1;
     if (s_config.lux_sample_count > 20) s_config.lux_sample_count = 20;
-    if (s_config.day_exit_lux <= s_config.night_enter_lux) {
-        s_config.day_exit_lux = s_config.night_enter_lux + 5.0f;
-    }
+    enforce_stable_band(&s_config);
 
     if (!aircube_model_is_pro()) {
         s_config.enabled = false;

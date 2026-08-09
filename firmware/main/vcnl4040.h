@@ -24,4 +24,9 @@ uint16_t vcnl4040_get_proximity(void);   // raw proximity counts (PS_DATA)
 uint16_t vcnl4040_get_ambient_raw(void); // raw ambient light counts (ALS_DATA)
 float    vcnl4040_get_lux(void);         // ambient light in lux (calibrated, LED-compensated)
 
+// Largest lux value vcnl4040_get_lux() can subtract as LED spill. Consumers that
+// threshold on lux need to know this to stay stable when their own decision
+// changes LED brightness.
+float    vcnl4040_max_led_spill_lux(void);
+
 #endif // AIRCUBE_VCNL4040_H
