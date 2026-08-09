@@ -333,16 +333,69 @@ Both converter files are in the [`z2m/`](z2m/) folder of this repo.
 ### Z2M 2.x (Recommended)
 
 1. Open **File editor** (install from Add-on Store if needed).
-2. Navigate to the `zigbee2mqtt` folder and create an `external_converters` subfolder.
+2. Navigate to the `zigbee2mqtt` folder (the one containing `configuration.yaml`) and create an `external_converters` subfolder next to it.
 3. Copy [`z2m/aircube.mjs`](z2m/aircube.mjs) into the `external_converters` folder.
-4. Open **`configuration.yaml`** in the `zigbee2mqtt` folder and add:
+4. Open **`configuration.yaml`** in the `zigbee2mqtt` folder and **enable external JavaScript**:
 
    ```yaml
+   advanced:
+     enable_external_js: true
+   ```
+
+   If you already have an `advanced:` section, just add the one line under it. **This step is required.** Zigbee2MQTT ships with external converters switched off, and when they are off Z2M never even looks in the `external_converters` folder -- you get no error, just a device with no custom sensors. There is an equivalent **Enable external JS** toggle in the Z2M web UI under **Settings > Advanced**.
+
+5. In the same **`configuration.yaml`**, **remove** any `external_converters:` block if one is present:
+
+   ```yaml
+   # Delete these lines -- they break converter loading on Z2M 2.x
    external_converters:
      - external_converters/aircube.mjs
    ```
 
-5. **Restart Zigbee2MQTT** from the add-on page.
+   Z2M 2.0 removed this setting. Everything inside the `external_converters` folder is now loaded automatically, and leaving the old setting in place stops the converter (and sometimes Z2M itself) from starting.
+
+6. **Restart Zigbee2MQTT** from the add-on page.
+7. Check the Zigbee2MQTT log. You should see `Loaded external converter 'aircube.mjs'.` If you instead see `External JS (converters/extensions) is disabled`, step 4 did not take effect.
+
+### Sample `configuration.yaml`
+
+A complete, working Z2M 2.x config with the AirCube converter enabled. Yours will have different values for `network_key`, `port`, and your MQTT credentials -- copy the structure, not the secrets.
+
+```yaml
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://core-mosquitto:1883
+  user: your_mqtt_user
+  password: your_mqtt_password
+
+serial:
+  port: /dev/ttyACM0
+
+advanced:
+  # Keep whatever network_key you already have. Changing it un-pairs every device.
+  network_key: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  # Required for the AirCube converter. Off by default; nothing in
+  # external_converters/ is read while this is false.
+  enable_external_js: true
+
+frontend:
+  enabled: true
+  port: 8099
+
+homeassistant:
+  enabled: true
+
+devices:
+  '0x1051dbfffe65fc77':
+    friendly_name: AirCube Living Room
+```
+
+The converter itself is **not** referenced anywhere in this file. `aircube.mjs` just has to exist in the `external_converters` folder next to `configuration.yaml`.
+
+Two mistakes that are easy to make here:
+
+- **Do not add a second `advanced:` block.** If `enable_external_js: false` is already in your config, edit that line in place. YAML does not merge duplicate keys -- Z2M parses the file with `js-yaml`, which treats a repeated top-level key as a fatal error, so the bridge will refuse to start.
+- **Do not add an `external_converters:` list.** That setting was removed in Z2M 2.0. Leaving it in place breaks converter loading.
 
 ### Z2M 1.x (Legacy)
 
@@ -366,7 +419,20 @@ Both converter files are in the [`z2m/`](z2m/) folder of this repo.
 
 ## B7 -- Verify Sensors
 
-Go to **Settings > Devices & Services > MQTT** and click on the AirCube. You should see six entities: Temperature, Humidity, eCO2, eTVOC, VOC Level (TVOC-derived), and Brightness.
+Go to **Settings > Devices & Services > MQTT** and click on the AirCube. You should see six entities:
+
+| Entity | What It Does | Unit |
+|--------|-------------|------|
+| Temperature | Room temperature | C |
+| Humidity | Relative humidity | % |
+| Equivalent CO2 | eCO2 concentration (estimated) | ppm |
+| VOC parts | eTVOC concentration | ppb |
+| VOC level | TVOC-derived VOC Level (0--500) | -- |
+| Brightness | LED brightness (slider) | 0--100 |
+
+On the **Pro**, two more entities appear from the dedicated sensors: **CO2** (true CO2 from the SCD41, in ppm) and **Illuminance** (ambient light from the VCNL4040, in lx). These are absent on the Base, which does not have those sensors.
+
+> If the device card says *"Automatically generated definition"*, the converter did **not** load. See the troubleshooting section below.
 
 ---
 
@@ -456,7 +522,12 @@ The LED follows **canonical VOC Level** (TVOC-derived) on a continuous green-to-
 - **ZHA (HA 2026.x):** The File editor shows the root as `/homeassistant/` instead of `/config/`. **Do not** create a new folder called `config` inside `/homeassistant/`. Place `custom_zha_quirks` directly inside `/homeassistant/`, next to `configuration.yaml`. The path in `configuration.yaml` should still say `/config/custom_zha_quirks/`.
 - **Firmware:** Make sure you are running the latest AirCube firmware from this repo. It actively sends attribute reports for the custom cluster so ZHA updates the sensors.
 - **Firmware version:** The device reports its build as the Zigbee Basic cluster **Software build ID** (`sw_build_id`, attribute `0x4000` on cluster `0x0000`, endpoint `10`). In ZHA you can read it under the device’s **Manage Zigbee device** UI. The string comes from ESP-IDF’s app version (`firmware/version.txt` at build time).
-- **Z2M 2.x:** Make sure you're using `aircube.mjs` (not `aircube.js`). Z2M 2.x requires ES module format. If Z2M renames the file to `aircube.mjs.invalid`, the converter has a load error — check the Z2M logs.
+- **Z2M 2.x:** Open the device page in Home Assistant. If it says **"Automatically generated definition"**, Z2M never loaded `aircube.mjs` and is guessing from the raw Zigbee clusters — which is why only the standard ones (temperature, humidity, CO2, illuminance, "Analog output 10") show up. The Z2M log tells you which failure it is; check, in order:
+  - The log line **`External JS (converters/extensions) is disabled`** at startup. This is the most common cause. Set `advanced: enable_external_js: true` in `configuration.yaml` (see the [sample config](#sample-configurationyaml)) and restart. While it is disabled Z2M does not read the `external_converters` folder at all, so there is no error message about the converter — only a `Device ... is NOT supported` warning.
+  - `aircube.mjs` sits in an `external_converters` folder **next to** `configuration.yaml` (on the HA add-on that is `/homeassistant/zigbee2mqtt/external_converters/`, **not** `.../data/external_converters/`). If the folder or filename is wrong, Z2M skips it silently.
+  - There is **no** `external_converters:` block left in `configuration.yaml`. That setting was removed in Z2M 2.0 and its presence prevents loading.
+  - You're using `aircube.mjs`, not `aircube.js` — Z2M 2.x requires ES module format. If Z2M renames the file to `aircube.mjs.invalid`, the converter has a load error; check the Z2M logs.
+  - After fixing any of the above, restart Z2M and then **re-interview** the device (device page > *Reconfigure*) so the custom cluster is registered.
 - **Z2M 1.x:** Check that `external_converters` is in the Z2M `configuration.yaml` and `aircube.js` is in the `zigbee2mqtt` folder. Restart Zigbee2MQTT.
 
 ### eCO2 / eTVOC / VOC Level values are stuck at 0

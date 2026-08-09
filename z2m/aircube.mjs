@@ -3,69 +3,45 @@
  *
  * Z2M 2.x requires ES module format (.mjs). For Z2M 1.x, use aircube.js instead.
  *
- * Place this file in your Zigbee2MQTT external_converters directory and
- * reference it in configuration.yaml:
+ * Installation (Z2M 2.x): drop this file into the `external_converters` folder
+ * next to your Zigbee2MQTT `configuration.yaml` and restart Zigbee2MQTT.
+ * Do NOT add an `external_converters:` entry to configuration.yaml -- that
+ * setting was removed in Z2M 2.0 and leaving it in place stops this converter
+ * (and sometimes Z2M itself) from starting.
  *
- *   external_converters:
- *     - external_converters/aircube.mjs
- *
- * Custom cluster 0xFC01 attributes (matches zha/aircube.py):
- *   0x0000 = eco2  (uint16, ppm)
- *   0x0001 = etvoc (uint16, ppb)
- *   0x0002 = aqi   (uint16, TVOC-derived VOC Level, 0-500)
+ * Exposed values:
+ *   Custom cluster 0xFC01 (matches zha/aircube.py)
+ *     0x0000 = eco2  (uint16, ppm)   -> Equivalent CO2
+ *     0x0001 = etvoc (uint16, ppb)   -> VOC parts
+ *     0x0002 = aqi   (uint16, 0-500) -> VOC level (TVOC-derived)
+ *   Analog Output 0x000D  -> Brightness (writable, 0-100%)
+ *   Temperature 0x0402, Humidity 0x0405
+ *   Pro only: CO2 0x040D (SCD41), Illuminance 0x0400 (VCNL4040)
  */
 
-import {temperature, humidity} from 'zigbee-herdsman-converters/lib/modernExtend';
-import * as exposes from 'zigbee-herdsman-converters/lib/exposes';
+import {Zcl} from 'zigbee-herdsman';
+import * as m from 'zigbee-herdsman-converters/lib/modernExtend';
 
-const e = exposes.presets;
+const AIR_QUALITY_CLUSTER = 'aircubeAirQuality';
 
-// Z2M 2.x requires the cluster ID as a string for custom (non-standard) clusters.
-const CUSTOM_CLUSTER_ID = '64513'; // 0xFC01
+const hasInputCluster = (device, cluster) =>
+    Boolean(device?.endpoints?.some((endpoint) => endpoint.supportsInputCluster(cluster)));
 
-const ATTR_ECO2  = 0x0000;
-const ATTR_ETVOC = 0x0001;
-const ATTR_AQI   = 0x0002;
-
-const fzAirCubeAirQuality = {
-    cluster: CUSTOM_CLUSTER_ID,
-    type: ['attributeReport', 'readResponse'],
-    convert: (model, msg, publish, options, meta) => {
-        const result = {};
-        if (msg.data.hasOwnProperty(ATTR_ECO2)) {
-            result.eco2 = msg.data[ATTR_ECO2];
-        }
-        if (msg.data.hasOwnProperty(ATTR_ETVOC)) {
-            result.voc = msg.data[ATTR_ETVOC];
-        }
-        if (msg.data.hasOwnProperty(ATTR_AQI)) {
-            result.aqi = msg.data[ATTR_AQI];
-        }
-        return result;
-    },
-};
-
-const fzBrightness = {
-    cluster: 'genAnalogOutput',
-    type: ['attributeReport', 'readResponse'],
-    convert: (model, msg, publish, options, meta) => {
-        if (msg.data.hasOwnProperty('presentValue')) {
-            return { brightness: Math.round(msg.data['presentValue']) };
-        }
-    },
-};
-
-const tzBrightness = {
-    key: ['brightness'],
-    convertSet: async (entity, key, value, meta) => {
-        const clamped = Math.min(100, Math.max(0, value));
-        await entity.write('genAnalogOutput', { presentValue: clamped });
-        return { state: { brightness: clamped } };
-    },
-    convertGet: async (entity, key, meta) => {
-        await entity.read('genAnalogOutput', ['presentValue']);
-    },
-};
+/**
+ * Base units do not implement the SCD41/VCNL4040 clusters at all, so their
+ * exposes are resolved per device instead of statically.
+ */
+const whenClusterPresent = (cluster, extend) => ({
+    ...extend,
+    exposes: [
+        (device, options) => {
+            if (!hasInputCluster(device, cluster)) return [];
+            return (extend.exposes ?? []).flatMap((expose) =>
+                typeof expose === 'function' ? expose(device, options) : [expose],
+            );
+        },
+    ],
+});
 
 const definition = {
     zigbeeModel: ['AirCube'],
@@ -73,51 +49,71 @@ const definition = {
     vendor: 'StuckAtPrototype',
     description: 'AirCube air quality monitor',
     extend: [
-        temperature(),
-        humidity(),
+        m.deviceAddCustomCluster(AIR_QUALITY_CLUSTER, {
+            name: AIR_QUALITY_CLUSTER,
+            ID: 0xfc01,
+            attributes: {
+                eco2: {name: 'eco2', ID: 0x0000, type: Zcl.DataType.UINT16},
+                etvoc: {name: 'etvoc', ID: 0x0001, type: Zcl.DataType.UINT16},
+                aqi: {name: 'aqi', ID: 0x0002, type: Zcl.DataType.UINT16},
+            },
+            commands: {},
+            commandsResponse: {},
+        }),
+        m.temperature({reporting: {min: '10_SECONDS', max: '1_MINUTE', change: 50}}),
+        m.humidity({reporting: {min: '10_SECONDS', max: '1_MINUTE', change: 100}}),
+        m.numeric({
+            name: 'eco2',
+            label: 'Equivalent CO2',
+            cluster: AIR_QUALITY_CLUSTER,
+            attribute: 'eco2',
+            description: 'Equivalent CO2 estimated from VOC (ENS16x)',
+            unit: 'ppm',
+            access: 'STATE_GET',
+            valueMin: 400,
+            valueMax: 8192,
+            reporting: {min: '10_SECONDS', max: '1_MINUTE', change: 50},
+        }),
+        m.numeric({
+            name: 'voc',
+            label: 'VOC parts',
+            cluster: AIR_QUALITY_CLUSTER,
+            attribute: 'etvoc',
+            description: 'Equivalent total VOC (tVOC)',
+            unit: 'ppb',
+            access: 'STATE_GET',
+            valueMin: 0,
+            valueMax: 65535,
+            reporting: {min: '10_SECONDS', max: '1_MINUTE', change: 10},
+        }),
+        m.numeric({
+            name: 'aqi',
+            label: 'VOC level',
+            cluster: AIR_QUALITY_CLUSTER,
+            attribute: 'aqi',
+            description: 'TVOC-derived VOC level (0-500)',
+            access: 'STATE_GET',
+            valueMin: 0,
+            valueMax: 500,
+            reporting: {min: '10_SECONDS', max: '1_MINUTE', change: 5},
+        }),
+        m.numeric({
+            name: 'brightness',
+            label: 'Brightness',
+            cluster: 'genAnalogOutput',
+            attribute: 'presentValue',
+            description: 'LED brightness',
+            unit: '%',
+            access: 'ALL',
+            valueMin: 0,
+            valueMax: 100,
+            valueStep: 1,
+            precision: 0,
+            reporting: {min: '10_SECONDS', max: '1_MINUTE', change: 5},
+        }),
+        whenClusterPresent('msCO2', m.co2()),
+        whenClusterPresent('msIlluminanceMeasurement', m.illuminance()),
     ],
-    fromZigbee: [fzAirCubeAirQuality, fzBrightness],
-    toZigbee: [tzBrightness],
-    exposes: [
-        e.numeric('eco2', exposes.access.STATE)
-            .withUnit('ppm')
-            .withDescription('Equivalent CO2')
-            .withValueMin(400)
-            .withValueMax(8192),
-        e.numeric('voc', exposes.access.STATE)
-            .withUnit('ppb')
-            .withDescription('tVOC')
-            .withValueMin(0)
-            .withValueMax(65535),
-        e.numeric('aqi', exposes.access.STATE)
-            .withUnit('')
-            .withDescription('VOC Level (TVOC)')
-            .withValueMin(0)
-            .withValueMax(500),
-        e.numeric('brightness', exposes.access.ALL)
-            .withUnit('%')
-            .withDescription('Brightness')
-            .withValueMin(0)
-            .withValueMax(100),
-    ],
-    configure: async (device, coordinatorEndpoint) => {
-        const endpoint = device.getEndpoint(10);
-        await endpoint.bind('msTemperatureMeasurement', coordinatorEndpoint);
-        await endpoint.bind('msRelativeHumidity', coordinatorEndpoint);
-        await endpoint.configureReporting('msTemperatureMeasurement', [{
-            attribute: 'measuredValue', minimumReportInterval: 1,
-            maximumReportInterval: 60, reportableChange: 50,
-        }]);
-        await endpoint.configureReporting('msRelativeHumidity', [{
-            attribute: 'measuredValue', minimumReportInterval: 1,
-            maximumReportInterval: 60, reportableChange: 100,
-        }]);
-        await endpoint.bind('genAnalogOutput', coordinatorEndpoint);
-        await endpoint.configureReporting('genAnalogOutput', [{
-            attribute: 'presentValue', minimumReportInterval: 1,
-            maximumReportInterval: 60, reportableChange: 5,
-        }]);
-    },
 };
 
 export default definition;
