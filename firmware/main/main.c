@@ -24,7 +24,7 @@
 
 static const char *TAG = "main";
 
-#define SENSOR_TASK_STACK_SIZE 4096
+#define SENSOR_TASK_STACK_SIZE 6144
 #define SENSOR_TASK_PRIORITY 5
 #define COMMAND_TASK_STACK_SIZE 4096
 #define COMMAND_TASK_PRIORITY 4
@@ -331,86 +331,120 @@ void sensor_task(void *pvParameters)
 
     bool is_pro = aircube_model_is_pro();
 
+    // This task's stack was overflowed once during development by a large JSON
+    // buffer added to a per-second code path, which hung the chip hard enough to
+    // wedge its USB. Report the headroom on the first pass and complain if it
+    // ever gets thin, so the next such mistake is visible instead of fatal.
+    bool stack_reported = false;
+
     while (1) {
         esp_task_wdt_reset();
+
+        UBaseType_t stack_free_words = uxTaskGetStackHighWaterMark(NULL);
+        if (!stack_reported) {
+            ESP_LOGI(TAG, "sensor_task stack headroom: %u bytes of %u",
+                     (unsigned)(stack_free_words * sizeof(StackType_t)),
+                     (unsigned)SENSOR_TASK_STACK_SIZE);
+            stack_reported = true;
+        }
+        if (stack_free_words * sizeof(StackType_t) < 512) {
+            ESP_LOGE(TAG, "sensor_task stack nearly exhausted: %u bytes left",
+                     (unsigned)(stack_free_words * sizeof(StackType_t)));
+        }
 
         // Temperature/RH source depends on the hardware model:
         //   Base -> ENS210, Pro -> SCD41 (ENS210 absent).
         // Both feed the ENS16X TEMP_IN/RH_IN registers for VOC compensation.
         float temp_c = 0.0f;
         float humidity = 0.0f;
-        uint8_t ens210_status = 0;   // kept for serial JSON compatibility
         uint16_t co2_ppm = 0;        // true CO2 (Pro/SCD41 only)
         float lux = 0.0f;            // ambient light (Pro/VCNL4040 only)
         uint8_t comp_t[2];
         uint8_t comp_h[2];
 
-        // ENS210 comparison readout (Pro hardware that still has an ENS210 fitted).
-        bool ens210_compare = false;
-        float ens210_temp_c = 0.0f;
-        float ens210_humidity = 0.0f;
+        // Whether each value is a current reading rather than the last one that
+        // happened to work. Everything downstream keys off these.
+        bool temp_valid = false;
+        bool hum_valid = false;
+        bool co2_valid = false;
 
         if (is_pro) {
             // Pro: SCD41 provides temp/RH/CO2; VCNL4040 provides ambient light.
             scd41_poll();   // drives single-shot cadence; refreshes cached values
+            temp_valid = scd41_has_data();
+            hum_valid  = temp_valid;   // same frame, same validity
+            co2_valid  = scd41_has_co2();
             temp_c   = scd41_get_temperature_c();
             humidity = scd41_get_humidity();
             co2_ppm  = scd41_get_co2();
-            ens210_status = 0x01;   // synthetic "OK" so downstream logic is unchanged
 
             vcnl4040_read();
             lux = vcnl4040_get_lux();
             auto_dim_update_lux(lux);
 
-            // If an ENS210 is also fitted, read it too so we can compare its
-            // temperature/humidity against the SCD41 (debug/calibration aid).
-            if (ens210_is_present()) {
-                ens210_read_envir();
-                ens210_temp_c = ens210_get_temperature(1) - 2; // same -2 C enclosure offset as Base
-                ens210_humidity = ens210_get_humidity();
-                ens210_compare = true;
-            }
-
-            // Only feed the ENS16X real compensation once the SCD41 has produced
-            // a valid measurement. During the first ~5 s warm-up its values are
-            // still 0, which would push bad temp/RH into the VOC compensation.
-            if (scd41_has_data()) {
+            // Only feed the ENS16X real compensation while the SCD41 reading is
+            // trustworthy; otherwise pushing it would compensate the VOC output
+            // against a stale or invented temperature.
+            if (temp_valid) {
                 compose_ens16x_compensation(temp_c, humidity, comp_t, comp_h);
                 ens16x_write_ens210_data(comp_t, comp_h);
-
+            }
+            if (co2_valid) {
                 // True CO2 in, for the LED's worst-of-VOC/CO2 arbitration below.
-                // Gated on scd41_has_data(), same as the compensation write
-                // above, so it only reflects a real reading rather than the
-                // transient 0 ppm seen during the ~5s SCD41 warm-up.
                 current_co2_level = co2_calculate((int)co2_ppm);
             }
         } else {
             // Base: ENS210 temperature and humidity.
             ens210_read_envir();
+            temp_valid = ens210_temperature_valid();
+            hum_valid  = ens210_humidity_valid();
             temp_c = ens210_get_temperature(1); // 1 = Celsius
             humidity = ens210_get_humidity();
-            ens210_status = ens210_get_status();
 
             // ENS210 reads ~2 C high in this enclosure; correct it.
             temp_c -= 2;
 
             // Write ENS210 data to ENS161 for environmental compensation
-            ens210_get_envir(comp_t, comp_h);
-            ens16x_write_ens210_data(comp_t, comp_h);
+            if (temp_valid && hum_valid) {
+                ens210_get_envir(comp_t, comp_h);
+                ens16x_write_ens210_data(comp_t, comp_h);
+            }
         }
-        
+
         // Refresh ENS16X device status (needed to detect warm-up completion)
         ens16x_get_device_status();
-        
-        // Read ENS16X air quality data
+
+        // Read ENS16X air quality data. These return -1 when the bus read failed.
         int etvoc = ens16x_read_etvoc();
         int eco2 = ens16x_read_eco2();
         int aqi_s = ens16x_read_aqi();         // Deprecated AQI-S; always 0
-        int aqi = aqi_calculate(etvoc);        // Canonical AirCube VOC Level (TVOC-derived, 0-500)
+        int aqi = (etvoc >= 0) ? aqi_calculate(etvoc) : -1;  // canonical VOC Level (0-500)
         int aqi_uba = ens16x_read_aqi_uba();
         enum ENS_STATUS ens16x_status = ens16x_get_status();
 
-        current_voc_level = aqi;
+        // Leave the LED on its last known level rather than slamming it to the
+        // best-case colour because a read failed.
+        if (aqi >= 0) {
+            current_voc_level = aqi;
+        }
+
+        // One line per fault edge, so a unit left on a serial monitor shows when
+        // the trouble started without the log being drowned every second.
+        bool sensors_ok = temp_valid && hum_valid && (etvoc >= 0) &&
+                          (!is_pro || co2_valid);
+        static bool prev_sensors_ok = true;
+        static bool first_health_report = true;
+        if (sensors_ok != prev_sensors_ok || first_health_report) {
+            if (sensors_ok) {
+                ESP_LOGI(TAG, "Sensor health OK (all channels reporting)");
+            } else {
+                ESP_LOGE(TAG, "SENSOR FAULT: temp_valid=%d hum_valid=%d co2_valid=%d "
+                              "etvoc=%d - affected values are being withheld",
+                         temp_valid, hum_valid, co2_valid, etvoc);
+            }
+            prev_sensors_ok = sensors_ok;
+            first_health_report = false;
+        }
         
         // Helper function to convert ENS16X status to string
         const char* ens16x_status_str;
@@ -434,39 +468,54 @@ void sensor_task(void *pvParameters)
         
         // Display all sensor data with status
         ESP_LOGI(TAG, "=== Sensor Data (%s) ===", aircube_model_name());
-        ESP_LOGI(TAG, "%s - Temperature: %.2f°C / %.2f°F, Humidity: %.2f%%",
-                 is_pro ? "SCD41 " : "ENS210", temp_c, temp_c * 1.8f + 32.0f, humidity);
+        if (temp_valid || hum_valid) {
+            ESP_LOGI(TAG, "%s - Temperature: %.2f°C / %.2f°F, Humidity: %.2f%%",
+                     is_pro ? "SCD41 " : "ENS210", temp_c, temp_c * 1.8f + 32.0f, humidity);
+        } else {
+            ESP_LOGW(TAG, "%s - Temperature/Humidity UNAVAILABLE",
+                     is_pro ? "SCD41 " : "ENS210");
+        }
         ESP_LOGI(TAG, "ENS16X - Status: %s, eTVOC: %d ppb, eCO2: %d ppm, VOC Level: %d, AQI-S: %d, AQI-UBA: %d",
                  ens16x_status_str, etvoc, eco2, aqi, aqi_s, aqi_uba);
         if (is_pro) {
-            ESP_LOGI(TAG, "SCD41  - CO2: %u ppm", co2_ppm);
-            ESP_LOGI(TAG, "VCNL4040 - Ambient: %.1f lux", lux);
-            if (ens210_compare) {
-                float dT_c = ens210_temp_c - temp_c;
-                ESP_LOGI(TAG, "ENS210 - Temperature: %.2f°C / %.2f°F, Humidity: %.2f%% (compare: dT=%+.2f°C / %+.2f°F, dRH=%+.2f%%)",
-                         ens210_temp_c, ens210_temp_c * 1.8f + 32.0f, ens210_humidity,
-                         dT_c, dT_c * 1.8f, ens210_humidity - humidity);
+            if (co2_valid) {
+                ESP_LOGI(TAG, "SCD41  - CO2: %u ppm", co2_ppm);
+            } else {
+                ESP_LOGW(TAG, "SCD41  - CO2 UNAVAILABLE");
             }
+            ESP_LOGI(TAG, "VCNL4040 - Ambient: %.1f lux", lux);
         }
 
         // On Pro the SCD41 provides true NDIR CO2; log/store/report that instead
         // of the ENS16X eCO2 estimate. eTVOC and VOC Level still come from ENS16X.
-        int co2_for_history = is_pro ? (int)co2_ppm : eco2;
+        int co2_for_history = is_pro ? (co2_valid ? (int)co2_ppm : -1) : eco2;
 
-        // Send sensor data as JSON over serial
-        serial_send_sensor_data(ens210_status, temp_c, humidity,
+        // Send sensor data as JSON over serial. The "ens210.status" field is a
+        // legacy key that both models populate; it now carries the real state of
+        // whichever sensor supplies temp/RH rather than a hardcoded "OK".
+        uint8_t temp_source_status = (temp_valid && hum_valid) ? 0x01 : 0x00;
+        serial_send_sensor_data(temp_source_status, temp_c, humidity,
                                ens16x_status_str, etvoc, eco2, aqi, aqi_s, aqi_uba,
                                aircube_model_name(), (int)co2_ppm, lux);
-        
+
         // Record sample into history accumulator and check for 10-min flush.
         // History stores the new canonical VOC Level (TVOC-derived); flushed entries
         // from before this change still hold the old AQI-S value in the same
         // columns - the on-flash byte layout did not change.
-        history_record_sample(temp_c, humidity, aqi, co2_for_history, etvoc);
+        history_record_sample(temp_c, temp_valid, humidity, hum_valid,
+                              aqi, co2_for_history, etvoc);
         history_check_flush();
         
-        // Push sensor data to the active radio (modes are exclusive by design)
-        if (radio_mode_is_zigbee_mode()) {
+        // Push sensor data to the active radio (modes are exclusive by design).
+        // Neither BTHome nor the Zigbee clusters we expose have a way to say
+        // "this reading is unavailable", so on a fault we stop updating instead
+        // of asserting a fresh but invented value. The attribute keeps its last
+        // value; the serial health object and the history sentinels are where
+        // the fault is actually visible. Teaching the radios to signal invalid
+        // is a protocol change and deliberately out of scope for this release.
+        if (!sensors_ok) {
+            ESP_LOGD(TAG, "Skipping radio update while a sensor fault is active");
+        } else if (radio_mode_is_zigbee_mode()) {
             // Zigbee: report every 10 seconds
             static TickType_t last_zb_update = 0;
             TickType_t now = xTaskGetTickCount();
@@ -555,24 +604,26 @@ void app_main(void)
     // Initialize button for brightness control
     button_init();
     
-    // Initialize ENS210 temperature and humidity sensor (Base; may be absent on Pro)
-    ens210_init();
-    ESP_LOGI(TAG, "ENS210 %s", ens210_is_present() ? "present" : "not present");
-    
-    // Initialize ENS16X air quality sensor
+    // Resolve Base vs Pro before any sensor init: the model is latched in NVS
+    // and decides which sensors this board is expected to have. A missing
+    // sensor is reported as a fault by device_model and does not change the
+    // model. This also gates temp/RH source selection and Pro-only Zigbee
+    // clusters.
+    aircube_model_resolve();
+
+    // ENS16X air quality is fitted on both models.
     ens16x_init();
     ESP_LOGI(TAG, "ENS16X initialized");
 
-    // Initialize Pro-model sensors. These probe for presence and are no-ops on
-    // Base hardware (which lacks them). Phase 1: debug output only.
-    scd41_init();
-    ESP_LOGI(TAG, "SCD41 %s", scd41_is_present() ? "present" : "not present");
-    vcnl4040_init();
-    ESP_LOGI(TAG, "VCNL4040 %s", vcnl4040_is_present() ? "present" : "not present");
-
-    // Decide Base vs Pro from sensor presence (drivers probed above). This
-    // gates temp/RH source selection and Pro-only Zigbee clusters.
-    aircube_model_detect();
+    if (aircube_model_is_pro()) {
+        scd41_init();
+        ESP_LOGI(TAG, "SCD41 %s", scd41_is_present() ? "present" : "not present");
+        vcnl4040_init();
+        ESP_LOGI(TAG, "VCNL4040 %s", vcnl4040_is_present() ? "present" : "not present");
+    } else {
+        ens210_init();
+        ESP_LOGI(TAG, "ENS210 %s", ens210_is_present() ? "present" : "not present");
+    }
 
     // Apply configured brightness through auto-dim (Pro) or pass-through (Base).
     auto_dim_init();

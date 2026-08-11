@@ -6,6 +6,7 @@
 #include "i2c_driver.h"
 #include <string.h>
 #include "esp_log.h"
+#include "esp_err.h"
 
 #define ENS16X_I2C_ADDRESS 0x52
 
@@ -32,13 +33,20 @@ int ens16x_aqi_uba = -1;
 enum ENS_OPMODE ens16x_get_opmode(void);
 void ens16x_set_opmode(enum ENS_OPMODE mode);
 
-enum ENS_STATUS ens16x_get_device_status(void){
+int ens16x_get_device_status(void){
 
     // read in ENS16x part number
     uint8_t i2c_data[1];
     memset(i2c_data, 0, 1);
     uint8_t i2c_byte_address[] = {ENS16X_DEVICE_STATUS};
-    i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 1);
+    if (i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 1) != ESP_OK) {
+        // Without a status byte we know nothing about the sensor, so say so
+        // rather than decoding the zeroed buffer into a confident "OK".
+        ens16x_new_data_available = 0;
+        ens16x_new_gpr_available = 0;
+        ens16x_status = ENS_NO_VALID_OUTPUT;
+        return -1;
+    }
 
     // bit 0 = NEWGPR
     // bit 1 = NEWDAT
@@ -89,7 +97,11 @@ int ens16x_read_etvoc(void){
     uint8_t i2c_data[2];
     memset(i2c_data, 0, 2);
     uint8_t i2c_byte_address[] = {ENS16X_REG_DATA_ETVOC};
-    i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 2);
+    if (i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 2) != ESP_OK) {
+        ESP_LOGW("ens16x", "eTVOC read failed");
+        ens16x_tvoc = -1;
+        return -1;
+    }
     uint16_t etvoc = ((uint16_t )i2c_data[0] | (uint16_t)i2c_data[1] << 8);
 
     ESP_LOGD("ens16x", "ETVOC_LSB: %u, ETVOC_MSB: %u", i2c_data[0], i2c_data[1]);
@@ -103,7 +115,11 @@ int ens16x_read_eco2(void){
     uint8_t i2c_data[2];
     memset(i2c_data, 0, 2);
     uint8_t i2c_byte_address[] = {ENS16X_REG_DATA_ECO2};
-    i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 2);
+    if (i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 2) != ESP_OK) {
+        ESP_LOGW("ens16x", "eCO2 read failed");
+        ens16x_eco2 = -1;
+        return -1;
+    }
     uint16_t eco2 = ((uint16_t )i2c_data[0] | (uint16_t)i2c_data[1] << 8);
 
     ESP_LOGD("ens16x", "ECO2_LSB: %u, ECO2_MSB: %u", i2c_data[0], i2c_data[1]);
@@ -123,7 +139,11 @@ int ens16x_read_aqi_uba(void){
     uint8_t i2c_data[1];
     memset(i2c_data, 0, 1);
     uint8_t i2c_byte_address[] = {ENS16X_REG_DATA_AQI_UBA};
-    i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 1);
+    if (i2c_driver_read(ENS16X_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 1) != ESP_OK) {
+        ESP_LOGW("ens16x", "AQI-UBA read failed");
+        ens16x_aqi_uba = -1;
+        return -1;
+    }
     int aqi_uba = i2c_data[0] & 0x07;  // AQI-UBA is in bits 0-2
 
     ESP_LOGI("ens16x", "aqi_uba: %d", aqi_uba);
@@ -158,7 +178,10 @@ void ens16x_write_ens210_data(uint8_t * t, uint8_t * h){
     i2c_data[4] = h[1];
 
     // write the regs
-    i2c_driver_write(ENS16X_I2C_ADDRESS, i2c_data, 5);
+    if (i2c_driver_write(ENS16X_I2C_ADDRESS, i2c_data, 5) != ESP_OK) {
+        ESP_LOGW("ens16x", "Compensation write failed; VOC output uses stale temp/RH");
+        return;
+    }
 
     // read back the temperature and humidity for verification
     uint8_t address[1] = {0x30};

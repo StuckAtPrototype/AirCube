@@ -24,6 +24,9 @@ enum ENS_OPMODE{
 };
 
 void ens16x_init(void);
+
+// Reads return -1 when the I2C transaction failed, so a bus problem cannot be
+// mistaken for a real measurement of zero.
 int ens16x_read_etvoc(void);
 int ens16x_get_etvoc(void);
 int ens16x_read_eco2(void);
@@ -32,7 +35,10 @@ int ens16x_get_aqi(void);
 int ens16x_read_aqi_uba(void);
 int ens16x_get_aqi_uba(void);
 enum ENS_STATUS ens16x_get_status(void);
-enum ENS_STATUS ens16x_get_device_status(void);  // Refresh and return current device status
+
+// Refresh the cached status flags. Returns the raw status byte, or -1 if it
+// could not be read (in which case the status becomes ENS_NO_VALID_OUTPUT).
+int ens16x_get_device_status(void);
 void ens16x_write_ens210_data(uint8_t * t, uint8_t * h);
 
 #endif //DN680R_ENS16X_DRIVER_H

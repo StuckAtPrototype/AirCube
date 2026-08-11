@@ -26,6 +26,14 @@
 // Sequence number for erased/empty slots
 #define HISTORY_SEQ_EMPTY         0xFFFF
 
+// Written into a channel's avg/min/max when a window contained no valid samples
+// for that channel. Both values are impossible for a real reading, so a reader
+// can draw a gap instead of a plausible-looking number. This is what keeps a
+// failed sensor out of the record rather than averaging its last good value
+// into every window for days.
+#define HISTORY_NO_DATA_S16       INT16_MIN
+#define HISTORY_NO_DATA_U16       0xFFFF
+
 /**
  * @brief Single history slot stored in flash (32 bytes, packed)
  *
@@ -85,6 +93,16 @@ typedef struct {
     uint16_t max_etvoc;
 
     uint32_t sample_count;
+
+    // Per-channel counts of VALID samples. A channel whose count is zero at
+    // flush time is recorded as "no data" rather than averaged, so one sensor
+    // failing does not poison the channels that are still working.
+    uint32_t temp_count;
+    uint32_t hum_count;
+    uint32_t aqi_count;
+    uint32_t eco2_count;
+    uint32_t etvoc_count;
+
     int64_t  window_start_us;  // esp_timer_get_time() at window start
 } history_accumulator_t;
 
@@ -104,13 +122,22 @@ esp_err_t history_init(void);
  * Call this every time new sensor data is available (~1 second).
  * The sample is accumulated in RAM (sum/min/max).
  *
- * @param temp_c   Temperature in Celsius
- * @param humidity Relative humidity in percent
- * @param aqi      VOC Level
- * @param eco2     Equivalent CO2 in ppm
- * @param etvoc    Equivalent TVOC in ppb
+ * Only values the caller vouches for are accumulated. Pass the validity flags
+ * from the sensor drivers rather than defaulting them to true: a value that is
+ * merely the last one that worked must not be recorded as a fresh sample.
+ * The aqi/eco2/etvoc channels treat any negative value as invalid.
+ *
+ * @param temp_c     Temperature in Celsius
+ * @param temp_valid Whether temp_c is a current, trustworthy reading
+ * @param humidity   Relative humidity in percent
+ * @param hum_valid  Whether humidity is a current, trustworthy reading
+ * @param aqi        VOC Level, negative if unavailable
+ * @param eco2       Equivalent CO2 in ppm, negative if unavailable
+ * @param etvoc      Equivalent TVOC in ppb, negative if unavailable
  */
-void history_record_sample(float temp_c, float humidity, int aqi, int eco2, int etvoc);
+void history_record_sample(float temp_c, bool temp_valid,
+                           float humidity, bool hum_valid,
+                           int aqi, int eco2, int etvoc);
 
 /**
  * @brief Check if the 10-minute window has elapsed and flush if so

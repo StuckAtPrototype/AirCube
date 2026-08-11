@@ -9,6 +9,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Bus address, exposed so the model detection can probe for this sensor without
+// pulling in the driver.
+#define VCNL4040_I2C_ADDRESS 0x60
+
 // Probe for the sensor (via its device ID register), and if present enable the
 // ambient light (ALS) and proximity (PS) engines. Safe to call on hardware
 // that does not have the VCNL4040 fitted (Base model).

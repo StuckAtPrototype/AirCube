@@ -15,13 +15,18 @@
 #include "button.h"
 #include "auto_dim.h"
 #include "history.h"
+#include "device_model.h"
+#include "scd41.h"
+#include "ens210.h"
+#include "ens16x_driver.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "serial_protocol";
 
 #define RX_BUF_SIZE 256
-#define JSON_OUTPUT_BUF_SIZE 512
+#define JSON_OUTPUT_BUF_SIZE 768
+#define HEALTH_JSON_BUF_SIZE 640
 // A single history slot can reach ~200 bytes once every numeric field is 4
 // digits wide (seen in real logs, e.g. v_x=2286, c_a=1252). 48 slots * 200
 // bytes plus the JSON envelope is ~9800 bytes, so keep a comfortable margin
@@ -65,8 +70,11 @@ void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float h
                              int aqi, int aqi_s, int aqi_uba,
                              const char* model, int co2_ppm, float lux)
 {
-    char json_buffer[JSON_OUTPUT_BUF_SIZE];
-    
+    // Static rather than on the stack: this is called from the sensor task once
+    // a second and the frame is large enough to matter against a 4 KB stack.
+    // Single-caller by design (sensor_task); not safe to call concurrently.
+    static char json_buffer[JSON_OUTPUT_BUF_SIZE];
+
     // Get timestamp (milliseconds since boot)
     uint32_t timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
     
@@ -78,15 +86,31 @@ void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float h
     // On Pro hardware temperature/humidity come from the SCD41 (the "ens210"
     // keys are kept for backward compatibility), and "scd41"/"vcnl4040" carry
     // the Pro-only true CO2 and ambient light. On Base co2/lux are 0.
+    // Compact per-channel validity, additive so the Windows app is unaffected.
+    // A consumer that reads these can tell a current reading from a held one;
+    // the full picture is available from the get_sensor_health command.
+    bool is_pro = aircube_model_is_pro();
+    bool temp_valid = is_pro ? scd41_has_data() : ens210_temperature_valid();
+    bool hum_valid  = is_pro ? scd41_has_data() : ens210_humidity_valid();
+    bool co2_valid  = is_pro ? scd41_has_co2() : (eco2 >= 0);
+
     int len = snprintf(json_buffer, sizeof(json_buffer),
         "{\"model\":\"%s\","
         "\"ens210\":{\"status\":%u,\"temperature_c\":%.2f,\"temperature_f\":%.2f,\"humidity\":%.2f},"
         "\"ens16x\":{\"status\":\"%s\",\"etvoc\":%d,\"eco2\":%d,\"aqi\":%d,\"aqi_s\":%d,\"aqi_uba\":%d},"
         "\"scd41\":{\"co2\":%d},\"vcnl4040\":{\"lux\":%.1f},"
+        "\"health\":{\"ok\":%s,\"temp_valid\":%s,\"hum_valid\":%s,\"co2_valid\":%s,"
+        "\"etvoc_valid\":%s,\"sensor_missing\":%s},"
         "\"timestamp\":%lu}\n",
         model, ens210_status, temperature_c, temperature_f, humidity,
         ens16x_status_str, etvoc, eco2, aqi, aqi_s, aqi_uba,
         co2_ppm, lux,
+        (temp_valid && hum_valid && etvoc >= 0 && (!is_pro || co2_valid)) ? "true" : "false",
+        temp_valid ? "true" : "false",
+        hum_valid ? "true" : "false",
+        co2_valid ? "true" : "false",
+        (etvoc >= 0) ? "true" : "false",
+        aircube_model_sensor_missing() ? "true" : "false",
         (unsigned long)timestamp);
     
     if (len > 0 && len < sizeof(json_buffer)) {
@@ -118,6 +142,67 @@ static void send_error(const char* msg)
         "{\"status\":\"error\",\"msg\":\"%s\"}\n", msg);
     
     if (len > 0 && len < sizeof(response)) {
+        printf("%s", response);
+        fflush(stdout);
+    }
+}
+
+// Per-sensor health, emitted both as an additive key on the periodic sensor
+// frame and on demand via get_sensor_health. Additive keys need no Windows app
+// change; the app ignores fields it does not know about.
+static int format_health_json(char *buf, size_t size)
+{
+    aircube_model_probe_t probe = aircube_model_probe_result();
+    bool is_pro = aircube_model_is_pro();
+
+    scd41_health_t scd = {0};
+    scd41_get_health(&scd);
+
+    bool temp_valid = is_pro ? scd.data_valid : ens210_temperature_valid();
+    bool hum_valid  = is_pro ? scd.data_valid : ens210_humidity_valid();
+
+    return snprintf(buf, size,
+        "{\"model\":\"%s\",\"model_source\":\"%s\",\"sensor_missing\":%s,"
+        "\"temp_valid\":%s,\"hum_valid\":%s,"
+        "\"probe\":{\"scd41\":%d,\"vcnl4040\":%d,\"ens210\":%d},"
+        "\"scd41\":{\"present\":%s,\"valid\":%s,\"co2_valid\":%s,\"stuck\":%s,"
+        "\"fails\":%lu,\"identical\":%lu,\"stuck_events\":%lu,"
+        "\"recoveries\":%lu,\"rejected\":%lu,"
+        "\"age_ms\":%lld,\"co2_age_ms\":%lld},"
+        "\"ens16x\":{\"etvoc_valid\":%s}}",
+        aircube_model_name(), aircube_model_source_name(),
+        aircube_model_sensor_missing() ? "true" : "false",
+        temp_valid ? "true" : "false",
+        hum_valid ? "true" : "false",
+        probe.scd41, probe.vcnl4040, probe.ens210,
+        scd.present ? "true" : "false",
+        scd.data_valid ? "true" : "false",
+        scd.co2_valid ? "true" : "false",
+        scd.stuck_latched ? "true" : "false",
+        (unsigned long)scd.consecutive_failures,
+        (unsigned long)scd.identical_streak,
+        (unsigned long)scd.stuck_events,
+        (unsigned long)scd.recovery_attempts,
+        (unsigned long)scd.rejected_samples,
+        (long long)scd.last_good_age_ms,
+        (long long)scd.last_co2_age_ms,
+        (ens16x_get_etvoc() >= 0) ? "true" : "false");
+}
+
+static void send_model_response(const char *cmd)
+{
+    aircube_model_probe_t probe = aircube_model_probe_result();
+
+    char response[224];
+    int len = snprintf(response, sizeof(response),
+        "{\"status\":\"ok\",\"cmd\":\"%s\",\"model\":\"%s\",\"source\":\"%s\","
+        "\"sensor_missing\":%s,"
+        "\"probe\":{\"scd41\":%d,\"vcnl4040\":%d,\"ens210\":%d}}\n",
+        cmd, aircube_model_name(), aircube_model_source_name(),
+        aircube_model_sensor_missing() ? "true" : "false",
+        probe.scd41, probe.vcnl4040, probe.ens210);
+
+    if (len > 0 && len < (int)sizeof(response)) {
         printf("%s", response);
         fflush(stdout);
     }
@@ -384,6 +469,89 @@ static bool parse_command(const char* buffer, size_t len)
         return true;
     }
     
+    // Report the latched model without changing it
+    if (strcmp(cmd_name, "get_model") == 0) {
+        send_model_response("get_model");
+        return true;
+    }
+
+    // Clear the NVS model latch and re-resolve from a fresh bus probe. The
+    // sensors for the old model are already initialised, so a reboot is needed
+    // for the new one to take effect.
+    if (strcmp(cmd_name, "redetect_model") == 0) {
+        if (aircube_model_force_redetect() == ESP_OK) {
+            send_model_response("redetect_model");
+        } else {
+            send_error("redetect_model failed");
+        }
+        return true;
+    }
+
+    // Full per-sensor health for field triage
+    if (strcmp(cmd_name, "get_sensor_health") == 0) {
+        // Static for the same reason as json_buffer: large frames stay off the
+        // task stack. The command task is the only caller.
+        static char health[HEALTH_JSON_BUF_SIZE];
+        int hlen = format_health_json(health, sizeof(health));
+        if (hlen > 0 && hlen < (int)sizeof(health)) {
+            printf("%s\n", health);
+            fflush(stdout);
+        } else {
+            send_error("health buffer too small");
+        }
+        return true;
+    }
+
+    // Raw read_measurement frame. This is what distinguishes a sensor returning
+    // constant-but-CRC-valid data from a decode problem on our side.
+    if (strcmp(cmd_name, "scd41_raw") == 0) {
+        scd41_raw_frame_t frame;
+        if (!scd41_get_raw_frame(&frame)) {
+            send_error("no scd41 frame captured yet");
+            return true;
+        }
+        printf("{\"status\":\"ok\",\"cmd\":\"scd41_raw\",\"age_ms\":%lld,"
+               "\"bytes\":\"%02X %02X %02X %02X %02X %02X %02X %02X %02X\","
+               "\"co2_word\":\"0x%04X\",\"t_word\":\"0x%04X\",\"rh_word\":\"0x%04X\","
+               "\"crc_ok\":{\"co2\":%s,\"temp\":%s,\"hum\":%s}}\n",
+               (long long)frame.age_ms,
+               frame.bytes[0], frame.bytes[1], frame.bytes[2],
+               frame.bytes[3], frame.bytes[4], frame.bytes[5],
+               frame.bytes[6], frame.bytes[7], frame.bytes[8],
+               frame.words[0], frame.words[1], frame.words[2],
+               (frame.crc_mask & 0x01) ? "true" : "false",
+               (frame.crc_mask & 0x02) ? "true" : "false",
+               (frame.crc_mask & 0x04) ? "true" : "false");
+        fflush(stdout);
+        return true;
+    }
+
+    // Sensor built-in self test. Blocks for about 10 seconds.
+    if (strcmp(cmd_name, "scd41_selftest") == 0) {
+        uint16_t result = 0;
+        esp_err_t err = scd41_self_test(&result);
+        if (err == ESP_OK) {
+            printf("{\"status\":\"ok\",\"cmd\":\"scd41_selftest\",\"result\":\"0x%04X\","
+                   "\"malfunction\":%s}\n",
+                   result, (result == 0) ? "false" : "true");
+            fflush(stdout);
+        } else {
+            send_error(esp_err_to_name(err));
+        }
+        return true;
+    }
+
+    // Manual stop_periodic + reinit. Never a factory reset.
+    if (strcmp(cmd_name, "scd41_reinit") == 0) {
+        esp_err_t err = scd41_reinit();
+        if (err == ESP_OK) {
+            send_response("ok", "scd41_reinit", 0);
+        } else {
+            send_error(esp_err_to_name(err));
+        }
+        return true;
+    }
+
     // Handle get_history_info command
     if (strcmp(cmd_name, "get_history_info") == 0) {
         serial_send_history_info();
