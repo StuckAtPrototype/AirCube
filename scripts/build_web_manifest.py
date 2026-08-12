@@ -23,9 +23,18 @@ from pathlib import Path
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "StuckAtPrototype/AirCube")
 OUT_DIR = Path("web/firmware")
-ASSET_PATTERN = re.compile(r"^AirCube_firmware_v([\d.]+)\.bin$")
+ASSET_PATTERN = re.compile(r"^AirCube_firmware_v[\d.]+\.bin$")
+VERSION_PATTERN = re.compile(r"\d+(?:\.\d+)*")
 KEEP_RELEASES = 5
 FLASH_ADDRESS = "0x0"
+
+
+def version_of(tag: str, filename: str) -> str:
+    """Releases have been tagged Release_v2.0.1, Release_V1.4.3 and Release_1.4.2,
+    and one asset shipped as v.1.4.3, so read the digits and drop the decoration.
+    """
+    match = VERSION_PATTERN.search(tag) or VERSION_PATTERN.search(filename)
+    return match.group(0) if match else tag
 
 
 def gh(*args: str) -> str:
@@ -48,7 +57,7 @@ def fetch_releases() -> list[dict]:
             continue
         releases.append({
             "tag": release["tag_name"],
-            "version": ASSET_PATTERN.match(asset["name"]).group(1),
+            "version": version_of(release["tag_name"], asset["name"]),
             "file": asset["name"],
             "size": asset["size"],
             "prerelease": bool(release.get("prerelease")),
