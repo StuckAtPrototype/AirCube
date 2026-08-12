@@ -421,9 +421,11 @@ export class DetailView {
     this.advRows.voc_level.textContent = String(reading.vocLevel);
     this.advRows.aqi_uba.textContent = reading.aqiUba ? String(reading.aqiUba) : "--";
     this.advRows.lux.textContent = device.isPro ? `${reading.lux.toFixed(0)} lx` : "n/a";
-    // The serial protocol carries no version field, so this is only known if
+    // Reported on every frame since 2.0.3; before that it is only known if
     // this browser flashed the cube.
-    this.advRows.fw.textContent = device.fwVersion || "not reported over USB";
+    this.advRows.fw.textContent = device.fwVersion
+      ? `v${device.fwVersion}`
+      : "not reported by this firmware";
     this.advRows.transport.textContent = "USB (Web Serial)";
 
     if (device.ledPercent != null) {

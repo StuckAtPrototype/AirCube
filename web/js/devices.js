@@ -98,6 +98,9 @@ export class Device extends EventTarget {
   _onLive(reading) {
     this.lastReading = reading;
     this.isPro = reading.isPro;
+    // Firmware older than 2.0.3 reports no version, so keep whatever the
+    // flasher recorded for this cube rather than blanking it.
+    if (reading.fwVersion) this.fwVersion = reading.fwVersion;
     this._changed();
   }
 

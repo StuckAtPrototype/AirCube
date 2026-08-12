@@ -6,6 +6,7 @@
 #include "serial_protocol.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include <string.h>
 #include <stdio.h>
@@ -94,15 +95,18 @@ void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float h
     bool hum_valid  = is_pro ? scd41_has_data() : ens210_humidity_valid();
     bool co2_valid  = is_pro ? scd41_has_co2() : (eco2 >= 0);
 
+    // esp_app_desc_t.version is a fixed 32-byte field that is not guaranteed to
+    // be terminated, so bound the conversion rather than trusting a NUL.
     int len = snprintf(json_buffer, sizeof(json_buffer),
-        "{\"model\":\"%s\","
+        "{\"model\":\"%s\",\"fw\":\"%.32s\","
         "\"ens210\":{\"status\":%u,\"temperature_c\":%.2f,\"temperature_f\":%.2f,\"humidity\":%.2f},"
         "\"ens16x\":{\"status\":\"%s\",\"etvoc\":%d,\"eco2\":%d,\"aqi\":%d,\"aqi_s\":%d,\"aqi_uba\":%d},"
         "\"scd41\":{\"co2\":%d},\"vcnl4040\":{\"lux\":%.1f},"
         "\"health\":{\"ok\":%s,\"temp_valid\":%s,\"hum_valid\":%s,\"co2_valid\":%s,"
         "\"etvoc_valid\":%s,\"sensor_missing\":%s},"
         "\"timestamp\":%lu}\n",
-        model, ens210_status, temperature_c, temperature_f, humidity,
+        model, esp_app_get_description()->version,
+        ens210_status, temperature_c, temperature_f, humidity,
         ens16x_status_str, etvoc, eco2, aqi, aqi_s, aqi_uba,
         co2_ppm, lux,
         (temp_valid && hum_valid && etvoc >= 0 && (!is_pro || co2_valid)) ? "true" : "false",

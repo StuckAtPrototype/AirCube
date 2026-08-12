@@ -205,18 +205,23 @@ The AirCube communicates over USB-Serial-JTAG at **115200 baud**. All messages a
 ```json
 {
   "model": "pro",
+  "fw": "2.0.3",
   "ens210": {"status": 0, "temperature_c": 23.45, "temperature_f": 74.21, "humidity": 52.30},
   "ens16x": {"status": "OK", "etvoc": 42, "eco2": 415, "aqi": 3, "aqi_s": 0, "aqi_uba": 1},
   "scd41": {"co2": 512},
   "vcnl4040": {"lux": 84.2},
+  "health": {"ok": true, "temp_valid": true, "hum_valid": true, "co2_valid": true, "etvoc_valid": true, "sensor_missing": false},
   "timestamp": 12345
 }
 ```
 
-`model` is `"base"` or `"pro"`. `aqi_s` is the deprecated AQI-S score -- `ens16x_read_aqi()` always
+`model` is `"base"` or `"pro"`. `fw` is the running firmware version, the same string as
+`firmware/version.txt`; it was added in 2.0.3, so treat it as optional when talking to older units.
+`aqi_s` is the deprecated AQI-S score -- `ens16x_read_aqi()` always
 returns `0` now; the field is kept only for serial JSON compatibility. `scd41.co2` and
 `vcnl4040.lux` are `0` on Base hardware (no SCD41/VCNL4040 fitted) and real readings on Pro.
-`timestamp` is milliseconds since boot.
+`health` carries per-channel validity so a consumer can tell a fresh reading from a held one;
+`get_sensor_health` returns the same picture in more detail. `timestamp` is milliseconds since boot.
 
 ### Commands (send to device)
 

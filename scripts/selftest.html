@@ -38,6 +38,7 @@
 
       const proLine = {
         model: "pro",
+        fw: "2.0.3",
         ens210: { status: 0, temperature_c: 23.45, temperature_f: 74.21, humidity: 52.3 },
         ens16x: { status: "OK", etvoc: 742, eco2: 415, aqi: 3, aqi_s: 0, aqi_uba: 1 },
         scd41: { co2: 1310 },
@@ -62,6 +63,18 @@
         if (q !== 2) throw new Error(`quality ${q}`);
         if (score < 50 || score > 75) throw new Error(`score ${score}`);
         return `quality=${q} score=${score}`;
+      });
+
+      check("firmware version rides the live frame", () => {
+        if (parseLive(proLine).fwVersion !== "2.0.3") throw new Error("not parsed");
+        const d = new Device({}, 9);
+        d._onLive(parseLive(proLine));
+        if (d.fwVersion !== "2.0.3") throw new Error(`device has ${d.fwVersion}`);
+        // A pre-2.0.3 cube sends no fw key; a version learned from flashing
+        // this cube must survive that.
+        d._onLive(parseLive({ ens210: {}, ens16x: {} }));
+        if (d.fwVersion !== "2.0.3") throw new Error("blanked by an older frame");
+        return `fw=${d.fwVersion}`;
       });
 
       check("Base falls back to eCO2 and estimates Pro from co2", () => {
@@ -159,9 +172,13 @@
         const co2Caption = detail.el.querySelector(".metric-tile .caption").textContent;
         const co2Value = detail.el.querySelector(".metric-tile .value").textContent;
         const gaugeScore = detail.el.querySelector(".gauge text:nth-of-type(2)").textContent;
+        const fwDt = [...detail.el.querySelectorAll(".advanced-grid dt")]
+          .find((n) => n.textContent === "Firmware");
+        const fwRow = fwDt.nextElementSibling.textContent;
         if (co2Caption !== "CO2") throw new Error(`caption ${co2Caption}`);
         if (co2Value !== "1310 ppm") throw new Error(`value ${co2Value}`);
-        return `hero="${hero}" tile=${co2Value} gauge=${gaugeScore}`;
+        if (fwRow !== "v2.0.3") throw new Error(`firmware row "${fwRow}"`);
+        return `hero="${hero}" tile=${co2Value} gauge=${gaugeScore} fw=${fwRow}`;
       });
 
       check("history chart produced data", () => {

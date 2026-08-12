@@ -38,7 +38,8 @@ const num = (v) => {
  * Since firmware 1.5.0 `ens16x.aqi` is the VOC Level index (0-500), which is a
  * different number from `ens16x.etvoc` in ppb despite the similar names: the
  * tiles show etvoc, the advanced drawer shows the index. Pro units add
- * scd41.co2 and vcnl4040.lux; older firmware omits `model`.
+ * scd41.co2 and vcnl4040.lux; older firmware omits `model`, and firmware
+ * before 2.0.3 omits `fw`.
  */
 export function parseLive(data) {
   const ens210 = data.ens210 || {};
@@ -57,6 +58,7 @@ export function parseLive(data) {
     lux: num(vcnl.lux),
     aqiUba: Math.round(num(ens16x.aqi_uba)),
     isPro: model !== undefined ? model === "pro" : co2 > 0,
+    fwVersion: typeof data.fw === "string" ? data.fw : "",
     timestamp: Date.now() / 1000,
   };
 }
