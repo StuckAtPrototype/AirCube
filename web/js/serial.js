@@ -29,6 +29,16 @@ export class SerialLink extends EventTarget {
   async open() {
     if (this.isOpen) return;
     await this.port.open({ baudRate: proto.SERIAL_BAUD });
+    // Chrome opens a port with DTR and RTS both asserted. That combination is
+    // harmless, but dropping both on close passes through DTR=0/RTS=1, which
+    // is the ESP32 auto-reset state and reboots the cube: sensor warm-up
+    // restarts and the history window still accumulating in RAM is lost.
+    // Parking RTS low keeps every later transition clear of it.
+    try {
+      await this.port.setSignals({ dataTerminalReady: true, requestToSend: false });
+    } catch {
+      /* platform or polyfill without signal control */
+    }
     this.isOpen = true;
     this._buffer = "";
     this._readLoop = this._read();
