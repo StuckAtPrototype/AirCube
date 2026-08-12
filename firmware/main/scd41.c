@@ -18,10 +18,9 @@ static const char *TAG = "scd41";
 // 16-bit command words (most significant byte transmitted first)
 #define SCD41_CMD_READ_MEASUREMENT        0xEC05
 #define SCD41_CMD_STOP_PERIODIC           0x3F86
+#define SCD41_CMD_START_LOW_POWER_PERIODIC 0x21AC
 #define SCD41_CMD_GET_SERIAL_NUMBER       0x3682
 #define SCD41_CMD_GET_SENSOR_VARIANT      0x202F
-#define SCD41_CMD_MEASURE_SINGLE_SHOT     0x219D  // CO2 + RH + T, ~5000 ms exec
-#define SCD41_CMD_MEASURE_SINGLE_SHOT_RHT 0x2196  // RH + T only, ~50 ms exec
 #define SCD41_CMD_SET_TEMPERATURE_OFFSET  0x241D
 #define SCD41_CMD_GET_DATA_READY          0xE4B8  // ~1 ms exec
 #define SCD41_CMD_REINIT                  0x3646  // ~30 ms exec
@@ -36,22 +35,6 @@ static const char *TAG = "scd41";
 #define SCD41_EXEC_REINIT_US       30000
 #define SCD41_EXEC_STOP_US         500000
 #define SCD41_EXEC_SELF_TEST_US    10000000
-#define SCD41_RHT_EXEC_US          50000      // measure_single_shot_rht_only
-#define SCD41_CO2_EXEC_US          5000000    // measure_single_shot
-
-// Single-shot cadence (wall-clock). RH+T is cheap (~50 ms) and runs often; the
-// full CO2 measurement (~5 s, the main self-heating contributor) runs less
-// often so the sensor stays closer to ambient temperature.
-#define SCD41_RHT_INTERVAL_US   (5ULL  * 1000000ULL)   // RH+T every 5 s
-#define SCD41_CO2_INTERVAL_US   (30ULL * 1000000ULL)   // CO2  every 30 s
-
-// A triggered CO2 shot that has not produced data by this point is abandoned
-// and counted as a failure, so a wedged sensor cannot park the state machine.
-#define SCD41_CO2_DEADLINE_US   (8ULL * 1000000ULL)
-
-// How long to keep asking whether a measurement is ready before giving up.
-#define SCD41_READY_TIMEOUT_US       200000
-#define SCD41_READY_POLL_INTERVAL_US 2000
 
 // Above this, wait by sleeping; below it, busy-wait. Sleeping is preferable but
 // cannot resolve short intervals (see scd41_delay_us).
@@ -68,10 +51,10 @@ static const char *TAG = "scd41";
 #define SCD41_CO2_MAX_PPM 40000      // sensor measurement range ceiling
 
 // Consecutive bit-identical (temperature, humidity) word pairs that latch a
-// stuck-channel fault. At the 5 s RH+T cadence this is about 5 minutes. A
+// stuck-channel fault. At the ~30 s low-power cadence this is about 5 minutes. A
 // healthy sensor jitters by several LSBs between measurements (one LSB is
 // 0.0027 C / 0.0015 %RH), so a run this long is not a quiet room.
-#define SCD41_STUCK_THRESHOLD 60
+#define SCD41_STUCK_THRESHOLD 10
 
 // Readings older than this stop being reported as current.
 #define SCD41_STALE_TIMEOUT_US     (60ULL  * 1000000ULL)
@@ -99,11 +82,10 @@ static const char *TAG = "scd41";
 #define SCD41_TEMPERATURE_OFFSET_C  4.0f
 
 // Software-only temperature trim (deg C), added to the reported temperature
-// after the sensor's own compensation. Humidity is NOT touched. Trimmed against
-// a calibrated reference thermometer: the SCD41 read 79.8 F while the reference
-// showed 77.4 F (2.4 F = 1.33 C too high), so the previous +1.86 C trim is
-// reduced by that amount to 0.53 C.
-#define SCD41_TEMPERATURE_TRIM_C    0.53f
+// after the sensor's own compensation. Humidity is NOT touched. Calibrated in
+// low-power periodic mode: the AirCube read 76.5 F while the reference read
+// 78.0 F, requiring an additional +0.83 C over the previous +0.53 C trim.
+#define SCD41_TEMPERATURE_TRIM_C    1.36f
 
 #define SCD41_MAX_WORDS 8
 
@@ -148,18 +130,6 @@ static uint16_t scd41_frame_words[3];
 static uint8_t  scd41_frame_crc_mask = 0;
 static int64_t  scd41_frame_us = 0;
 static bool     scd41_frame_valid = false;
-
-// Single-shot state machine. The full CO2 shot takes ~5 s, so it is issued and
-// then read on a later poll() call rather than blocking.
-typedef enum {
-    SCD41_STATE_IDLE = 0,
-    SCD41_STATE_WAIT_CO2,   // full single-shot issued; waiting to read the result
-} scd41_state_t;
-
-static scd41_state_t scd41_state       = SCD41_STATE_IDLE;
-static int64_t       scd41_op_start_us = 0;   // when the async CO2 shot was issued
-static int64_t       scd41_last_rht_us = 0;   // last RH+T attempt time
-static int64_t       scd41_last_co2_us = 0;   // last CO2 attempt time
 
 static esp_err_t scd41_recover(const char *reason);
 
@@ -301,26 +271,6 @@ static esp_err_t scd41_data_ready(bool *ready)
     }
     *ready = ((status & 0x07FF) != 0);
     return ESP_OK;
-}
-
-// Poll data-ready up to a bounded deadline. Replaces trusting a fixed delay.
-static esp_err_t scd41_wait_data_ready(void)
-{
-    int64_t deadline = esp_timer_get_time() + SCD41_READY_TIMEOUT_US;
-    for (;;) {
-        bool ready = false;
-        esp_err_t ret = scd41_data_ready(&ready);
-        if (ret != ESP_OK) {
-            return ret;
-        }
-        if (ready) {
-            return ESP_OK;
-        }
-        if (esp_timer_get_time() >= deadline) {
-            return ESP_ERR_TIMEOUT;
-        }
-        scd41_delay_us(SCD41_READY_POLL_INTERVAL_US);
-    }
 }
 
 static void scd41_note_success(void)
@@ -550,38 +500,41 @@ void scd41_init(void)
 
     ESP_LOGI(TAG, "SCD41 detected, serial: %04X%04X%04X", serial[0], serial[1], serial[2]);
 
-    // Apply the static self-heating temperature offset while idle, then leave
-    // the sensor idle so scd41_poll() can drive single-shot measurements.
+    // Apply the static self-heating temperature offset while idle.
     scd41_apply_temperature_offset(SCD41_TEMPERATURE_OFFSET_C);
 
-    // Seed the cadence timers "one full interval ago" so the first poll()
-    // triggers a CO2 single-shot immediately (first reading ~5 s after boot).
-    scd41_state       = SCD41_STATE_IDLE;
-    scd41_op_start_us = 0;
-    scd41_last_rht_us = -(int64_t)SCD41_RHT_INTERVAL_US;
-    scd41_last_co2_us = -(int64_t)SCD41_CO2_INTERVAL_US;
+    // Low-power periodic mode produces one complete CO2/RH/T frame about every
+    // 30 seconds. This is a datasheet-supported continuous mode and keeps the
+    // default ASC timing/EEPROM behavior valid.
+    ret = scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to start low-power periodic measurement: %s",
+                 esp_err_to_name(ret));
+        return;
+    }
 
     scd41_present = true;
-    ESP_LOGI(TAG, "SCD41 initialized in single-shot mode "
-                  "(RH+T every %llu s, CO2 every %llu s)",
-             SCD41_RHT_INTERVAL_US / 1000000ULL,
-             SCD41_CO2_INTERVAL_US / 1000000ULL);
+    ESP_LOGI(TAG, "SCD41 initialized in low-power periodic mode (~30 s updates)");
 }
 
-// stop_periodic + reinit + re-apply offset. Deliberately does NOT issue
-// perform_factory_reset: that erases the sensor's calibration, and a unit whose
-// readings are already suspect should not also lose its calibration
-// unattended.
+// stop_periodic + reinit + re-apply offset + restart low-power periodic mode.
+// Deliberately does NOT issue perform_factory_reset: that erases the sensor's
+// calibration, and a unit whose readings are already suspect should not also
+// lose its calibration unattended.
 static esp_err_t scd41_recover(const char *reason)
 {
     scd41_recovery_attempts++;
     ESP_LOGW(TAG, "Recovery attempt %lu (%s): stop_periodic + reinit",
              (unsigned long)scd41_recovery_attempts, reason);
 
-    scd41_send_command(SCD41_CMD_STOP_PERIODIC);
+    esp_err_t ret = scd41_send_command(SCD41_CMD_STOP_PERIODIC);
     scd41_delay_us(SCD41_EXEC_STOP_US);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "stop_periodic command failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
-    esp_err_t ret = scd41_send_command(SCD41_CMD_REINIT);
+    ret = scd41_send_command(SCD41_CMD_REINIT);
     scd41_delay_us(SCD41_EXEC_REINIT_US);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "reinit command failed: %s", esp_err_to_name(ret));
@@ -591,19 +544,21 @@ static esp_err_t scd41_recover(const char *reason)
     // reinit reloads user settings from EEPROM, so the offset must go back in.
     scd41_apply_temperature_offset(SCD41_TEMPERATURE_OFFSET_C);
 
+    ret = scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to restart low-power periodic measurement: %s",
+                 esp_err_to_name(ret));
+        return ret;
+    }
+
     // Give the sensor a clean slate to be judged on. A latched stuck fault is
     // deliberately NOT cleared here: only genuinely moving readings clear it
     // (see scd41_check_stuck), so a reinit that did not actually fix anything
     // cannot put the old frozen value back into circulation.
-    scd41_state = SCD41_STATE_IDLE;
     scd41_consecutive_failures = 0;
     scd41_retry_after_us = 0;
     scd41_have_prev_words = false;
     scd41_identical_streak = 0;
-
-    int64_t now = esp_timer_get_time();
-    scd41_last_rht_us = now - (int64_t)SCD41_RHT_INTERVAL_US;
-    scd41_last_co2_us = now - (int64_t)SCD41_CO2_INTERVAL_US;
 
     ESP_LOGW(TAG, "Recovery complete; sensor will be re-assessed");
     return ESP_OK;
@@ -627,24 +582,30 @@ esp_err_t scd41_reinit(void)
 static esp_err_t scd41_self_test_locked(uint16_t *result)
 {
     ESP_LOGW(TAG, "Running self test, this takes about 10 seconds");
-    scd41_send_command(SCD41_CMD_STOP_PERIODIC);
+    esp_err_t ret = scd41_send_command(SCD41_CMD_STOP_PERIODIC);
     scd41_delay_us(SCD41_EXEC_STOP_US);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "stop_periodic command failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
-    esp_err_t ret = scd41_read_words(SCD41_CMD_PERFORM_SELF_TEST, result, 1,
-                                     SCD41_EXEC_SELF_TEST_US);
-    if (ret == ESP_OK) {
+    esp_err_t self_test_ret = scd41_read_words(SCD41_CMD_PERFORM_SELF_TEST, result, 1,
+                                               SCD41_EXEC_SELF_TEST_US);
+    if (self_test_ret == ESP_OK) {
         ESP_LOGW(TAG, "Self test result 0x%04X (%s)", *result,
                  (*result == 0) ? "no malfunction" : "MALFUNCTION");
     } else {
-        ESP_LOGE(TAG, "Self test failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Self test failed: %s", esp_err_to_name(self_test_ret));
     }
 
-    // The self test leaves the sensor idle; restart the cadence from here so we
-    // do not immediately fire a measurement into a settling sensor.
-    scd41_state = SCD41_STATE_IDLE;
-    scd41_last_rht_us = esp_timer_get_time();
-    scd41_last_co2_us = esp_timer_get_time();
-    return ret;
+    // The self test leaves the sensor idle. Attempt to resume measurements even
+    // if fetching its result failed, while preserving the original error.
+    esp_err_t restart_ret = scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
+    if (restart_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to restart low-power periodic measurement: %s",
+                 esp_err_to_name(restart_ret));
+    }
+    return (self_test_ret != ESP_OK) ? self_test_ret : restart_ret;
 }
 
 esp_err_t scd41_self_test(uint16_t *result)
@@ -662,8 +623,8 @@ esp_err_t scd41_self_test(uint16_t *result)
     return ret;
 }
 
-// Read the measurement the sensor has waiting. Used by both single-shot paths.
-static bool scd41_read_and_store(bool co2_is_fresh)
+// Read and store the complete CO2/RH/T frame waiting in periodic mode.
+static bool scd41_read_and_store(void)
 {
     uint16_t words[3] = {0};
     esp_err_t ret = scd41_read_words(SCD41_CMD_READ_MEASUREMENT, words, 3,
@@ -677,9 +638,9 @@ static bool scd41_read_and_store(bool co2_is_fresh)
     // failed read, otherwise a sensor returning plausible-CRC garbage would
     // never trip the recovery path.
     bool stored_rht = scd41_store_temp_rh(words[1], words[2]);
-    bool stored_co2 = co2_is_fresh ? scd41_store_co2(words[0]) : false;
+    bool stored_co2 = scd41_store_co2(words[0]);
 
-    if (!stored_rht && !(co2_is_fresh && stored_co2)) {
+    if (!stored_rht && !stored_co2) {
         scd41_note_failure("measurement validation", ESP_ERR_INVALID_RESPONSE);
         return false;
     }
@@ -692,100 +653,32 @@ static bool scd41_poll_locked(void)
 {
     int64_t now = esp_timer_get_time();
 
-    switch (scd41_state) {
-    case SCD41_STATE_WAIT_CO2: {
-        // A full single-shot is in progress; wait out its ~5 s execution time
-        // (non-blocking across poll() calls), then retrieve CO2 + RH + T.
-        int64_t elapsed = now - scd41_op_start_us;
-        if (elapsed < (int64_t)SCD41_CO2_EXEC_US) {
-            return false;
-        }
-
-        bool ready = false;
-        esp_err_t ret = scd41_data_ready(&ready);
-        if (ret != ESP_OK) {
-            scd41_state = SCD41_STATE_IDLE;
-            scd41_last_co2_us = now;
-            scd41_note_failure("get_data_ready", ret);
-            return false;
-        }
-        if (!ready) {
-            // Keep waiting across polls, but never indefinitely.
-            if (elapsed < (int64_t)SCD41_CO2_DEADLINE_US) {
-                return false;
-            }
-            scd41_state = SCD41_STATE_IDLE;
-            scd41_last_co2_us = now;
-            scd41_note_failure("CO2 single-shot", ESP_ERR_TIMEOUT);
-            return false;
-        }
-
-        scd41_state = SCD41_STATE_IDLE;
-        scd41_last_co2_us = now;
-        bool fresh = scd41_read_and_store(true);
-        if (fresh) {
-            // The CO2 shot also produced a fresh RH+T pair.
-            scd41_last_rht_us = now;
-        }
-        return fresh;
-    }
-
-    case SCD41_STATE_IDLE:
-    default:
-        // Recovery and retry pacing only gate new work, never the collection of
-        // a measurement already in flight (handled above).
-        if ((scd41_consecutive_failures >= SCD41_RECOVERY_THRESHOLD || scd41_stuck_latched) &&
-            scd41_recovery_attempts < SCD41_RECOVERY_MAX_ATTEMPTS &&
-            now >= scd41_recovery_after_us) {
-            scd41_recover(scd41_stuck_latched ? "stuck temperature/humidity"
-                                              : "repeated read failures");
-            scd41_recovery_after_us = esp_timer_get_time() + (int64_t)SCD41_RECOVERY_SPACING_US;
-            return false;
-        }
-        // Past the attempt ceiling we stop reinitialising but keep reading, so a
-        // sensor that comes back on its own still clears its own fault.
-        if (now < scd41_retry_after_us) {
-            return false;
-        }
-
-        // CO2 due: trigger a full single-shot now, read it on a later poll().
-        if ((now - scd41_last_co2_us) >= (int64_t)SCD41_CO2_INTERVAL_US) {
-            esp_err_t ret = scd41_send_command(SCD41_CMD_MEASURE_SINGLE_SHOT);
-            if (ret == ESP_OK) {
-                scd41_op_start_us = now;
-                scd41_state = SCD41_STATE_WAIT_CO2;
-                return false;
-            }
-            // Trigger failed. Record it, then fall through so the cheap RH+T
-            // path still gets a turn instead of being starved by the CO2 path.
-            scd41_last_co2_us = now;
-            scd41_note_failure("trigger CO2 single-shot", ret);
-            return false;
-        }
-
-        // RH+T due: cheap (~50 ms), so trigger and read within this call.
-        if ((now - scd41_last_rht_us) >= (int64_t)SCD41_RHT_INTERVAL_US) {
-            scd41_last_rht_us = now;   // advance regardless, so failures back off
-
-            esp_err_t ret = scd41_send_command(SCD41_CMD_MEASURE_SINGLE_SHOT_RHT);
-            if (ret != ESP_OK) {
-                scd41_note_failure("trigger RH+T single-shot", ret);
-                return false;
-            }
-
-            scd41_delay_us(SCD41_RHT_EXEC_US);
-
-            ret = scd41_wait_data_ready();
-            if (ret != ESP_OK) {
-                scd41_note_failure("RH+T data-ready", ret);
-                return false;
-            }
-
-            // RH+T-only: the CO2 word is not freshly measured; keep last CO2.
-            return scd41_read_and_store(false);
-        }
+    if ((scd41_consecutive_failures >= SCD41_RECOVERY_THRESHOLD || scd41_stuck_latched) &&
+        scd41_recovery_attempts < SCD41_RECOVERY_MAX_ATTEMPTS &&
+        now >= scd41_recovery_after_us) {
+        scd41_recover(scd41_stuck_latched ? "stuck temperature/humidity"
+                                          : "repeated read failures");
+        scd41_recovery_after_us = esp_timer_get_time() + (int64_t)SCD41_RECOVERY_SPACING_US;
         return false;
     }
+
+    // Past the attempt ceiling we stop reinitialising but keep reading, so a
+    // sensor that comes back on its own still clears its own fault.
+    if (now < scd41_retry_after_us) {
+        return false;
+    }
+
+    bool ready = false;
+    esp_err_t ret = scd41_data_ready(&ready);
+    if (ret != ESP_OK) {
+        scd41_note_failure("get_data_ready", ret);
+        return false;
+    }
+    if (!ready) {
+        return false;
+    }
+
+    return scd41_read_and_store();
 }
 
 bool scd41_poll(void)

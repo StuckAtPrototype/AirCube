@@ -14,8 +14,8 @@
 // pulling in the driver.
 #define SCD41_I2C_ADDRESS 0x62
 
-// Probe for the sensor, and if present configure it for single-shot operation
-// (applies the static temperature offset and leaves the sensor idle).
+// Probe for the sensor, apply the static temperature offset, and start
+// low-power periodic measurement mode (~30-second CO2/RH/T updates).
 // Safe to call on hardware that does not have the SCD41 fitted (Base model):
 // it will simply mark the sensor as not present.
 void scd41_init(void);
@@ -23,10 +23,9 @@ void scd41_init(void);
 // Returns true if the SCD41 was detected during scd41_init().
 bool scd41_is_present(void);
 
-// Drives the single-shot measurement state machine. Call frequently (e.g. once
-// per sensor-task loop). It triggers an RH+T single shot every ~5 s and a full
-// CO2 single shot every ~30 s, reading the (multi-second) CO2 result
-// asynchronously so it never blocks. Updates the cached getters.
+// Polls data-ready in low-power periodic mode. Call frequently (e.g. once per
+// sensor-task loop); when the sensor's ~30-second frame is ready, reads CO2,
+// temperature and humidity together and updates the cached getters.
 // Returns true when fresh values were read on this call.
 bool scd41_poll(void);
 
@@ -38,12 +37,12 @@ float    scd41_get_humidity(void);       // relative humidity in %
 
 // True only while the cached temperature/humidity can be trusted: at least one
 // measurement has been accepted, it is recent, and no stuck-channel fault is
-// latched. False during the initial ~5 s warm-up and again once readings go
+// latched. False during the initial ~30 s measurement and again once readings go
 // stale, so callers never publish an old value as if it were current.
 bool scd41_has_data(void);
 
-// True while the cached CO2 value can be trusted. Tracked separately from
-// temperature/humidity because CO2 refreshes on its own, much slower cadence.
+// True while the cached CO2 value can be trusted. Tracked separately so a
+// T/RH-only fault can withhold those channels without discarding valid CO2.
 bool scd41_has_co2(void);
 
 // Snapshot of driver health, for serial diagnostics and fault reporting.
@@ -80,8 +79,8 @@ bool scd41_get_raw_frame(scd41_raw_frame_t *out);
 esp_err_t scd41_self_test(uint16_t *result);
 
 // stop_periodic_measurement + reinit + re-apply the temperature offset, then
-// resume the state machine. Clears the failure counters and any stuck fault so
-// the sensor gets a fresh assessment. Never performs a factory reset.
+// restart low-power periodic mode. Clears failure counters but retains a stuck
+// fault until genuinely moving readings arrive. Never performs a factory reset.
 esp_err_t scd41_reinit(void);
 
 #endif // AIRCUBE_SCD41_H
