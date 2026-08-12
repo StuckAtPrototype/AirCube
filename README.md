@@ -4,6 +4,8 @@
 
 Works standalone out of the box. Pairs with Home Assistant in minutes. Other platforms are supported through **[community-contributed extensions](#community-extensions)**.
 
+[AirCube Web](https://stuckatprototype.github.io/AirCube/) -- Live readings, history and firmware updates in your browser. Nothing to install.
+
 [Watch the demo](https://youtu.be/m12KpLyLCrw) (early build -- Home Assistant integration came after this video)
 
 [AirCube](https://stuckatprototype.com/products/aircube) -- Assembled AirCube
