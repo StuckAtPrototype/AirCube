@@ -22,10 +22,26 @@
 #include "ens16x_driver.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include <stdarg.h>
 
 static const char *TAG = "serial_protocol";
 
 #define RX_BUF_SIZE 256
+// TX ring the driver drains into the USB FIFO. Only needs to be big enough that
+// the writer isn't woken for every packet; a history page is many times this.
+#define TX_BUF_SIZE 2048
+// Per-chunk ceiling on how long we wait for the host to drain the ring. Long
+// enough to ride out a browser hiccup, short enough that a host which has
+// stopped reading entirely cannot wedge the sensor task.
+#define TX_CHUNK_TIMEOUT_MS 200
+// Must stay comfortably under TX_BUF_SIZE: the driver's write is all-or-nothing
+// against the ring, so an oversized request can never be satisfied.
+#define TX_CHUNK_BYTES 512
+#define LOG_LINE_BUF_SIZE 256
+// Reads per poll. The RX ring is larger than one read, so a burst needs several
+// passes to clear; the cap keeps the command task from spinning forever.
+#define RX_PASSES_PER_POLL 8
 #define JSON_OUTPUT_BUF_SIZE 768
 #define HEALTH_JSON_BUF_SIZE 640
 // A single history slot can reach ~200 bytes once every numeric field is 4
@@ -44,19 +60,117 @@ static const char *TAG = "serial_protocol";
 extern uint32_t get_sensor_readout_period_ms(void);
 extern void set_sensor_readout_period_ms(uint32_t period);
 
+// Serialises every byte we put on the wire. Both protocol frames and log lines
+// take it, so a log emitted mid-transfer cannot land inside a history page.
+static SemaphoreHandle_t s_tx_lock;
+static bool s_tx_direct;
+
+/*
+ * Write straight to the USB-Serial-JTAG driver rather than through stdout.
+ *
+ * stdout reaches the host by a route that is both slow and lossy: the primary
+ * console is UART0, whose blocking write paces every byte at 115200 even though
+ * nothing is attached to it, and the USB copy is a secondary console sink that
+ * pushes one byte at a time and silently discards the rest once its ring stays
+ * full for 50 ms. Its return value is thrown away by the console layer, so the
+ * drop is invisible. The only reason that sink survives today is that the UART
+ * throttles the producer below the rate at which it can back up - which is why
+ * simply raising the console baud rate corrupts the stream instead of speeding
+ * it up.
+ *
+ * The driver call below copies into a ring the ISR drains, blocks while that
+ * ring is full, and reports what it took, so a slow host slows us down instead
+ * of losing bytes.
+ */
+/*
+ * Push a buffer out in ring-sized bites. Caller must hold s_tx_lock.
+ *
+ * usb_serial_jtag_write_bytes() is all-or-nothing: it hands the whole request
+ * to xRingbufferSend(), which waits for that many contiguous bytes to come
+ * free and otherwise fails. A request larger than the TX ring can therefore
+ * never succeed, so a history page has to be split rather than handed over
+ * whole.
+ */
+static void tx_locked(const char *data, size_t len)
+{
+    size_t sent = 0;
+    while (sent < len) {
+        size_t chunk = len - sent;
+        if (chunk > TX_CHUNK_BYTES) {
+            chunk = TX_CHUNK_BYTES;
+        }
+        int n = usb_serial_jtag_write_bytes(data + sent, chunk,
+                                            pdMS_TO_TICKS(TX_CHUNK_TIMEOUT_MS));
+        if (n <= 0) {
+            // Host has stopped reading. Abandon the rest of this frame rather
+            // than block forever; the client re-requests what it never got.
+            break;
+        }
+        sent += (size_t)n;
+    }
+}
+
+static void serial_write(const char *data, size_t len)
+{
+    if (!s_tx_direct) {
+        // Pre-init, or the driver refused to install: stdout is all we have.
+        fwrite(data, 1, len, stdout);
+        fflush(stdout);
+        return;
+    }
+
+    xSemaphoreTake(s_tx_lock, portMAX_DELAY);
+    tx_locked(data, len);
+    xSemaphoreGive(s_tx_lock);
+}
+
+static void serial_write_str(const char *s)
+{
+    serial_write(s, strlen(s));
+}
+
+/*
+ * Route ESP_LOG through the same lock, so log output cannot interleave into a
+ * frame. It also keeps logs visible to `idf.py monitor`, which reads the USB
+ * port, now that protocol output no longer travels via the console.
+ */
+static int serial_log_vprintf(const char *fmt, va_list args)
+{
+    if (!s_tx_direct || xPortInIsrContext()) {
+        return vprintf(fmt, args);
+    }
+
+    // Static rather than stack: this runs on whichever task logged, and some of
+    // them have small stacks. The lock inside serial_write does not cover the
+    // formatting, so take it here for the buffer's sake as well.
+    static char line[LOG_LINE_BUF_SIZE];
+
+    xSemaphoreTake(s_tx_lock, portMAX_DELAY);
+    int len = vsnprintf(line, sizeof(line), fmt, args);
+    if (len > 0) {
+        tx_locked(line, (len < (int)sizeof(line)) ? (size_t)len : sizeof(line) - 1);
+    }
+    xSemaphoreGive(s_tx_lock);
+    return len;
+}
+
 void serial_protocol_init(void)
 {
     // ESP32-H2 uses USB-Serial-JTAG for console (not UART 0)
     // Install the USB-Serial-JTAG driver for RX capability
     usb_serial_jtag_driver_config_t usb_serial_config = {
         .rx_buffer_size = RX_BUF_SIZE * 2,
-        .tx_buffer_size = RX_BUF_SIZE,
+        .tx_buffer_size = TX_BUF_SIZE,
     };
 
+    s_tx_lock = xSemaphoreCreateMutex();
+
     esp_err_t ret = usb_serial_jtag_driver_install(&usb_serial_config);
-    if (ret == ESP_OK) {
+    if (ret == ESP_OK && s_tx_lock != NULL) {
         // Switch VFS to use the driver so RX data goes into the driver's buffer
         usb_serial_jtag_vfs_use_driver();
+        s_tx_direct = true;
+        esp_log_set_vprintf(serial_log_vprintf);
         ESP_LOGI(TAG, "USB-Serial-JTAG driver installed");
     } else {
         ESP_LOGW(TAG, "USB-Serial-JTAG driver install failed: %s (RX commands may not work)",
@@ -118,9 +232,7 @@ void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float h
         (unsigned long)timestamp);
     
     if (len > 0 && len < sizeof(json_buffer)) {
-        // Write to console UART using printf (goes to UART 0)
-        printf("%s", json_buffer);
-        fflush(stdout); // Ensure immediate output
+        serial_write(json_buffer, (size_t)len);
     } else {
         ESP_LOGW(TAG, "JSON buffer too small or formatting error");
     }
@@ -134,8 +246,7 @@ static void send_response(const char* status, const char* cmd, float value)
         status, cmd ? cmd : "", value);
     
     if (len > 0 && len < sizeof(response)) {
-        printf("%s", response);
-        fflush(stdout);
+        serial_write(response, (size_t)len);
     }
 }
 
@@ -146,8 +257,7 @@ static void send_error(const char* msg)
         "{\"status\":\"error\",\"msg\":\"%s\"}\n", msg);
     
     if (len > 0 && len < sizeof(response)) {
-        printf("%s", response);
-        fflush(stdout);
+        serial_write(response, (size_t)len);
     }
 }
 
@@ -207,8 +317,7 @@ static void send_model_response(const char *cmd)
         probe.scd41, probe.vcnl4040, probe.ens210);
 
     if (len > 0 && len < (int)sizeof(response)) {
-        printf("%s", response);
-        fflush(stdout);
+        serial_write(response, (size_t)len);
     }
 }
 
@@ -233,8 +342,7 @@ static void send_config_response(void)
         status.effective_pct);
 
     if (len > 0 && len < (int)sizeof(response)) {
-        printf("%s", response);
-        fflush(stdout);
+        serial_write(response, (size_t)len);
     }
 }
 
@@ -255,8 +363,7 @@ void serial_send_history_info(void)
         entry_count, HISTORY_MAX_VALID_ENTRIES, HISTORY_SLOT_SIZE, (unsigned long)HISTORY_WINDOW_US);
 
     if (len > 0 && len < (int)sizeof(response)) {
-        printf("%s", response);
-        fflush(stdout);
+        serial_write(response, (size_t)len);
     }
 }
 
@@ -383,8 +490,7 @@ void serial_send_history_page(uint16_t start, uint16_t count)
 
     #undef SAFE_APPEND
 
-    printf("%s", buf);
-    fflush(stdout);
+    serial_write(buf, pos);
 
     free(buf);
     history_stream_release();
@@ -408,25 +514,30 @@ static void dump_history_csv(void)
     uint16_t write_index, entry_count;
     history_get_info(&write_index, &entry_count);
 
-    printf("\n--- History: %u entries ---\n", entry_count);
-    printf("slot,seq,temp_avg,temp_min,temp_max,hum_avg,hum_min,hum_max,"
-           "aqi_avg,aqi_min,aqi_max,eco2_avg,eco2_min,eco2_max,"
-           "etvoc_avg,etvoc_min,etvoc_max\n");
+    char line[192];
+    int len = snprintf(line, sizeof(line), "\n--- History: %u entries ---\n", entry_count);
+    serial_write(line, (size_t)len);
+    serial_write_str("slot,seq,temp_avg,temp_min,temp_max,hum_avg,hum_min,hum_max,"
+                     "aqi_avg,aqi_min,aqi_max,eco2_avg,eco2_min,eco2_max,"
+                     "etvoc_avg,etvoc_min,etvoc_max\n");
 
     for (uint16_t i = 0; i < entry_count; i++) {
         history_slot_t slot;
         if (history_read_slot(i, &slot) == ESP_OK) {
-            printf("%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+            len = snprintf(line, sizeof(line),
+                   "%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
                    i, slot.sequence,
                    slot.temp_avg, slot.temp_min, slot.temp_max,
                    slot.hum_avg, slot.hum_min, slot.hum_max,
                    slot.aqi_avg, slot.aqi_min, slot.aqi_max,
                    slot.eco2_avg, slot.eco2_min, slot.eco2_max,
                    slot.etvoc_avg, slot.etvoc_min, slot.etvoc_max);
+            if (len > 0 && len < (int)sizeof(line)) {
+                serial_write(line, (size_t)len);
+            }
         }
     }
-    printf("--- End ---\n");
-    fflush(stdout);
+    serial_write_str("--- End ---\n");
 }
 
 static bool parse_command(const char* buffer, size_t len)
@@ -496,10 +607,10 @@ static bool parse_command(const char* buffer, size_t len)
         // Static for the same reason as json_buffer: large frames stay off the
         // task stack. The command task is the only caller.
         static char health[HEALTH_JSON_BUF_SIZE];
-        int hlen = format_health_json(health, sizeof(health));
-        if (hlen > 0 && hlen < (int)sizeof(health)) {
-            printf("%s\n", health);
-            fflush(stdout);
+        int hlen = format_health_json(health, sizeof(health) - 1);
+        if (hlen > 0 && hlen < (int)sizeof(health) - 1) {
+            health[hlen] = '\n';
+            serial_write(health, (size_t)hlen + 1);
         } else {
             send_error("health buffer too small");
         }
@@ -514,7 +625,9 @@ static bool parse_command(const char* buffer, size_t len)
             send_error("no scd41 frame captured yet");
             return true;
         }
-        printf("{\"status\":\"ok\",\"cmd\":\"scd41_raw\",\"age_ms\":%lld,"
+        char raw[256];
+        int rlen = snprintf(raw, sizeof(raw),
+               "{\"status\":\"ok\",\"cmd\":\"scd41_raw\",\"age_ms\":%lld,"
                "\"bytes\":\"%02X %02X %02X %02X %02X %02X %02X %02X %02X\","
                "\"co2_word\":\"0x%04X\",\"t_word\":\"0x%04X\",\"rh_word\":\"0x%04X\","
                "\"crc_ok\":{\"co2\":%s,\"temp\":%s,\"hum\":%s}}\n",
@@ -526,7 +639,9 @@ static bool parse_command(const char* buffer, size_t len)
                (frame.crc_mask & 0x01) ? "true" : "false",
                (frame.crc_mask & 0x02) ? "true" : "false",
                (frame.crc_mask & 0x04) ? "true" : "false");
-        fflush(stdout);
+        if (rlen > 0 && rlen < (int)sizeof(raw)) {
+            serial_write(raw, (size_t)rlen);
+        }
         return true;
     }
 
@@ -535,10 +650,14 @@ static bool parse_command(const char* buffer, size_t len)
         uint16_t result = 0;
         esp_err_t err = scd41_self_test(&result);
         if (err == ESP_OK) {
-            printf("{\"status\":\"ok\",\"cmd\":\"scd41_selftest\",\"result\":\"0x%04X\","
+            char reply[128];
+            int slen = snprintf(reply, sizeof(reply),
+                   "{\"status\":\"ok\",\"cmd\":\"scd41_selftest\",\"result\":\"0x%04X\","
                    "\"malfunction\":%s}\n",
                    result, (result == 0) ? "false" : "true");
-            fflush(stdout);
+            if (slen > 0 && slen < (int)sizeof(reply)) {
+                serial_write(reply, (size_t)slen);
+            }
         } else {
             send_error(esp_err_to_name(err));
         }
@@ -670,50 +789,67 @@ void serial_process_commands(void)
 {
     static uint8_t rx_buffer[RX_BUF_SIZE];
     static size_t buffer_pos = 0;
-    
-    // Read available data from USB-Serial-JTAG (non-blocking, 0 tick timeout)
-    int len = usb_serial_jtag_read_bytes(rx_buffer + buffer_pos,
-                                          RX_BUF_SIZE - buffer_pos - 1, 0);
-    
-    if (len > 0) {
-        buffer_pos += len;
-        rx_buffer[buffer_pos] = '\0'; // Null terminate
-        
-        // Single-character shortcuts (no Enter needed)
-        if (buffer_pos == 1 && rx_buffer[0] == 'h') {
-            dump_history_csv();
-            buffer_pos = 0;
-            return;
-        }
-        
-        // Look for complete JSON commands (ending with \n or })
-        char* newline = strchr((char*)rx_buffer, '\n');
-        char* brace_end = strrchr((char*)rx_buffer, '}');
-        
-        if (newline || (brace_end && buffer_pos > 0)) {
-            // Process command
-            size_t cmd_len = newline ? (newline - (char*)rx_buffer) : 
-                            (brace_end ? (brace_end - (char*)rx_buffer + 1) : buffer_pos);
-            
-            if (cmd_len > 0 && cmd_len < RX_BUF_SIZE) {
-                rx_buffer[cmd_len] = '\0';
-                parse_command((char*)rx_buffer, cmd_len);
-            }
-            
-            // Shift remaining data to start of buffer
-            size_t remaining = buffer_pos - cmd_len - (newline ? 1 : 0);
-            if (remaining > 0 && remaining < RX_BUF_SIZE) {
-                memmove(rx_buffer, rx_buffer + cmd_len + (newline ? 1 : 0), remaining);
-                buffer_pos = remaining;
-            } else {
-                buffer_pos = 0;
-            }
-        }
-        
-        // Prevent buffer overflow
+
+    // Bound the work per poll so a host that streams without pause cannot keep
+    // this task from yielding.
+    for (int pass = 0; pass < RX_PASSES_PER_POLL; pass++) {
+        // A buffer this full holds no terminator, so nothing in it will ever
+        // parse. Reset before reading rather than after: at RX_BUF_SIZE - 1 the
+        // read below asks for zero bytes and returns 0 without touching the
+        // buffer, so recovery placed after it can never run and the command
+        // path stays dead until reboot.
         if (buffer_pos >= RX_BUF_SIZE - 1) {
             ESP_LOGW(TAG, "Command buffer overflow, resetting");
             buffer_pos = 0;
+        }
+
+        int len = usb_serial_jtag_read_bytes(rx_buffer + buffer_pos,
+                                             RX_BUF_SIZE - buffer_pos - 1, 0);
+        if (len <= 0) {
+            return;
+        }
+
+        buffer_pos += (size_t)len;
+        rx_buffer[buffer_pos] = '\0';
+
+        // Single-character shortcut (no Enter needed). Only reachable at a
+        // command boundary, since every JSON command opens with '{'.
+        if (buffer_pos == 1 && rx_buffer[0] == 'h') {
+            dump_history_csv();
+            buffer_pos = 0;
+            continue;
+        }
+
+        // Drain every complete command the read delivered, not just the first.
+        // Bursts arrive far faster than this poll runs - a brightness slider
+        // sends one command per pointer move - and leaving the remainder queued
+        // is what let the buffer fill up in the first place.
+        for (;;) {
+            char *newline = memchr(rx_buffer, '\n', buffer_pos);
+            size_t cmd_len;
+            size_t consumed;
+
+            if (newline != NULL) {
+                cmd_len = (size_t)(newline - (char *)rx_buffer);
+                consumed = cmd_len + 1;
+            } else if (buffer_pos > 0 && rx_buffer[buffer_pos - 1] == '}') {
+                // A command pasted into a terminal without pressing Enter.
+                cmd_len = buffer_pos;
+                consumed = buffer_pos;
+            } else {
+                break;  // Partial command, wait for the rest.
+            }
+
+            if (cmd_len > 0) {
+                rx_buffer[cmd_len] = '\0';
+                parse_command((char *)rx_buffer, cmd_len);
+            }
+
+            buffer_pos -= consumed;
+            if (buffer_pos > 0) {
+                memmove(rx_buffer, rx_buffer + consumed, buffer_pos);
+            }
+            rx_buffer[buffer_pos] = '\0';
         }
     }
 }
