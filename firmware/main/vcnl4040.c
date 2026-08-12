@@ -13,8 +13,6 @@
 
 static const char *TAG = "vcnl4040";
 
-#define VCNL4040_I2C_ADDRESS 0x60
-
 // Register (command) map
 #define VCNL4040_REG_ALS_CONF  0x00  // ALS integration time / persistence / enable
 #define VCNL4040_REG_PS_CONF12 0x03  // PS_CONF1 (low) + PS_CONF2 (high)

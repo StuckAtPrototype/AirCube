@@ -241,34 +241,51 @@ esp_err_t history_init(void)
     return ESP_OK;
 }
 
-void history_record_sample(float temp_c, float humidity, int aqi, int eco2, int etvoc)
+void history_record_sample(float temp_c, bool temp_valid,
+                           float humidity, bool hum_valid,
+                           int aqi, int eco2, int etvoc)
 {
     if (!s_initialized) return;
 
-    int16_t temp_x100 = float_to_x100(temp_c);
-    int16_t hum_x100 = float_to_x100(humidity);
-    uint16_t aqi_u16 = clamp_u16(aqi);
-    uint16_t eco2_u16 = clamp_u16(eco2);
-    uint16_t etvoc_u16 = clamp_u16(etvoc);
+    if (temp_valid) {
+        int16_t temp_x100 = float_to_x100(temp_c);
+        s_accum.sum_temp += temp_c;
+        if (temp_x100 < s_accum.min_temp) s_accum.min_temp = temp_x100;
+        if (temp_x100 > s_accum.max_temp) s_accum.max_temp = temp_x100;
+        s_accum.temp_count++;
+    }
 
-    // Accumulate sums
-    s_accum.sum_temp += temp_c;
-    s_accum.sum_hum += humidity;
-    s_accum.sum_aqi += aqi_u16;
-    s_accum.sum_eco2 += eco2_u16;
-    s_accum.sum_etvoc += etvoc_u16;
+    if (hum_valid) {
+        int16_t hum_x100 = float_to_x100(humidity);
+        s_accum.sum_hum += humidity;
+        if (hum_x100 < s_accum.min_hum) s_accum.min_hum = hum_x100;
+        if (hum_x100 > s_accum.max_hum) s_accum.max_hum = hum_x100;
+        s_accum.hum_count++;
+    }
 
-    // Update min/max
-    if (temp_x100 < s_accum.min_temp) s_accum.min_temp = temp_x100;
-    if (temp_x100 > s_accum.max_temp) s_accum.max_temp = temp_x100;
-    if (hum_x100 < s_accum.min_hum) s_accum.min_hum = hum_x100;
-    if (hum_x100 > s_accum.max_hum) s_accum.max_hum = hum_x100;
-    if (aqi_u16 < s_accum.min_aqi) s_accum.min_aqi = aqi_u16;
-    if (aqi_u16 > s_accum.max_aqi) s_accum.max_aqi = aqi_u16;
-    if (eco2_u16 < s_accum.min_eco2) s_accum.min_eco2 = eco2_u16;
-    if (eco2_u16 > s_accum.max_eco2) s_accum.max_eco2 = eco2_u16;
-    if (etvoc_u16 < s_accum.min_etvoc) s_accum.min_etvoc = etvoc_u16;
-    if (etvoc_u16 > s_accum.max_etvoc) s_accum.max_etvoc = etvoc_u16;
+    if (aqi >= 0) {
+        uint16_t aqi_u16 = clamp_u16(aqi);
+        s_accum.sum_aqi += aqi_u16;
+        if (aqi_u16 < s_accum.min_aqi) s_accum.min_aqi = aqi_u16;
+        if (aqi_u16 > s_accum.max_aqi) s_accum.max_aqi = aqi_u16;
+        s_accum.aqi_count++;
+    }
+
+    if (eco2 >= 0) {
+        uint16_t eco2_u16 = clamp_u16(eco2);
+        s_accum.sum_eco2 += eco2_u16;
+        if (eco2_u16 < s_accum.min_eco2) s_accum.min_eco2 = eco2_u16;
+        if (eco2_u16 > s_accum.max_eco2) s_accum.max_eco2 = eco2_u16;
+        s_accum.eco2_count++;
+    }
+
+    if (etvoc >= 0) {
+        uint16_t etvoc_u16 = clamp_u16(etvoc);
+        s_accum.sum_etvoc += etvoc_u16;
+        if (etvoc_u16 < s_accum.min_etvoc) s_accum.min_etvoc = etvoc_u16;
+        if (etvoc_u16 > s_accum.max_etvoc) s_accum.max_etvoc = etvoc_u16;
+        s_accum.etvoc_count++;
+    }
 
     s_accum.sample_count++;
 }
@@ -289,30 +306,60 @@ bool history_check_flush(void)
     // history handlers (they run in different tasks).
     HISTORY_LOCK();
 
-    // Compute averages
-    float n = (float)s_accum.sample_count;
+    // Average over each channel's own valid-sample count, and mark channels
+    // that had none as no-data rather than inventing a number for them.
     history_slot_t slot;
     slot.sequence = s_next_sequence;
 
-    slot.temp_avg = float_to_x100(s_accum.sum_temp / n);
-    slot.temp_min = s_accum.min_temp;
-    slot.temp_max = s_accum.max_temp;
+    if (s_accum.temp_count > 0) {
+        slot.temp_avg = float_to_x100(s_accum.sum_temp / (float)s_accum.temp_count);
+        slot.temp_min = s_accum.min_temp;
+        slot.temp_max = s_accum.max_temp;
+    } else {
+        slot.temp_avg = HISTORY_NO_DATA_S16;
+        slot.temp_min = HISTORY_NO_DATA_S16;
+        slot.temp_max = HISTORY_NO_DATA_S16;
+    }
 
-    slot.hum_avg = float_to_x100(s_accum.sum_hum / n);
-    slot.hum_min = s_accum.min_hum;
-    slot.hum_max = s_accum.max_hum;
+    if (s_accum.hum_count > 0) {
+        slot.hum_avg = float_to_x100(s_accum.sum_hum / (float)s_accum.hum_count);
+        slot.hum_min = s_accum.min_hum;
+        slot.hum_max = s_accum.max_hum;
+    } else {
+        slot.hum_avg = HISTORY_NO_DATA_S16;
+        slot.hum_min = HISTORY_NO_DATA_S16;
+        slot.hum_max = HISTORY_NO_DATA_S16;
+    }
 
-    slot.aqi_avg = (uint16_t)(s_accum.sum_aqi / s_accum.sample_count);
-    slot.aqi_min = s_accum.min_aqi;
-    slot.aqi_max = s_accum.max_aqi;
+    if (s_accum.aqi_count > 0) {
+        slot.aqi_avg = (uint16_t)(s_accum.sum_aqi / s_accum.aqi_count);
+        slot.aqi_min = s_accum.min_aqi;
+        slot.aqi_max = s_accum.max_aqi;
+    } else {
+        slot.aqi_avg = HISTORY_NO_DATA_U16;
+        slot.aqi_min = HISTORY_NO_DATA_U16;
+        slot.aqi_max = HISTORY_NO_DATA_U16;
+    }
 
-    slot.eco2_avg = (uint16_t)(s_accum.sum_eco2 / s_accum.sample_count);
-    slot.eco2_min = s_accum.min_eco2;
-    slot.eco2_max = s_accum.max_eco2;
+    if (s_accum.eco2_count > 0) {
+        slot.eco2_avg = (uint16_t)(s_accum.sum_eco2 / s_accum.eco2_count);
+        slot.eco2_min = s_accum.min_eco2;
+        slot.eco2_max = s_accum.max_eco2;
+    } else {
+        slot.eco2_avg = HISTORY_NO_DATA_U16;
+        slot.eco2_min = HISTORY_NO_DATA_U16;
+        slot.eco2_max = HISTORY_NO_DATA_U16;
+    }
 
-    slot.etvoc_avg = (uint16_t)(s_accum.sum_etvoc / s_accum.sample_count);
-    slot.etvoc_min = s_accum.min_etvoc;
-    slot.etvoc_max = s_accum.max_etvoc;
+    if (s_accum.etvoc_count > 0) {
+        slot.etvoc_avg = (uint16_t)(s_accum.sum_etvoc / s_accum.etvoc_count);
+        slot.etvoc_min = s_accum.min_etvoc;
+        slot.etvoc_max = s_accum.max_etvoc;
+    } else {
+        slot.etvoc_avg = HISTORY_NO_DATA_U16;
+        slot.etvoc_min = HISTORY_NO_DATA_U16;
+        slot.etvoc_max = HISTORY_NO_DATA_U16;
+    }
 
     // Check if the target slot's sector needs erasing
     // If the slot is at the start of a sector, or if the slot is not empty,
@@ -364,8 +411,11 @@ bool history_check_flush(void)
         return false;
     }
 
-    ESP_LOGI(TAG, "Flushed slot %u (seq %u, %lu samples, temp_avg=%d, aqi_avg=%u)",
+    ESP_LOGI(TAG, "Flushed slot %u (seq %u, %lu samples, valid T/RH/VOC %lu/%lu/%lu, "
+                  "temp_avg=%d, aqi_avg=%u)",
              s_write_index, slot.sequence, (unsigned long)s_accum.sample_count,
+             (unsigned long)s_accum.temp_count, (unsigned long)s_accum.hum_count,
+             (unsigned long)s_accum.aqi_count,
              slot.temp_avg, slot.aqi_avg);
 
     // Advance state

@@ -6,7 +6,6 @@
 #include "freertos/task.h"
 #include <string.h>
 
-#define ENS210_I2C_ADDRESS 0x43
 #define ENS210_PART_ID     0x0210
 
 #define ENS210_REG_PART_ID 0x00
@@ -28,8 +27,22 @@ float humidity_percentage;
 
 static bool ens210_present = false;
 
+// Set per read by ens210_read_envir(): false when the bus transaction failed or
+// the sensor cleared its own VALID bit. The cached values hold their previous
+// contents in that case, so callers must consult these before publishing.
+static bool temperature_valid = false;
+static bool humidity_valid = false;
+
 bool ens210_is_present(void){
     return ens210_present;
+}
+
+bool ens210_temperature_valid(void){
+    return temperature_valid;
+}
+
+bool ens210_humidity_valid(void){
+    return humidity_valid;
 }
 
 void ens210_get_envir(uint8_t * t, uint8_t * h){
@@ -98,10 +111,16 @@ void ens210_read_envir(void){
     uint8_t i2c_data[3];
     uint8_t i2c_byte_address[1];
 
+    temperature_valid = false;
+    humidity_valid = false;
+
     // Read temperature value (3-byte register at address 0x30)
     i2c_byte_address[0] = ENS210_REG_T_VAL;
     memset(i2c_data, 0, sizeof(i2c_data));
-    i2c_driver_read(ENS210_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 3);
+    if (i2c_driver_read(ENS210_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 3) != ESP_OK) {
+        ESP_LOGW("ens210", "Temperature read failed");
+        return;
+    }
 
     // Extract 24-bit value (little endian): [0]=LSB, [1]=MSB, [2]=VALID+CRC
     uint32_t t_val = ((uint32_t)i2c_data[0]) | 
@@ -123,6 +142,7 @@ void ens210_read_envir(void){
         temperature_K = TinK;
         temperature_C = TinC;
         temperature_F = TinF;
+        temperature_valid = true;
 
         ESP_LOGI("ens210", "%5.1fK %4.1fC %4.1fF", TinK, TinC, TinF);
     } else {
@@ -132,7 +152,10 @@ void ens210_read_envir(void){
     // Read humidity value (3-byte register at address 0x33)
     i2c_byte_address[0] = ENS210_REG_H_VAL;
     memset(i2c_data, 0, sizeof(i2c_data));
-    i2c_driver_read(ENS210_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 3);
+    if (i2c_driver_read(ENS210_I2C_ADDRESS, i2c_byte_address, 1, i2c_data, 3) != ESP_OK) {
+        ESP_LOGW("ens210", "Humidity read failed");
+        return;
+    }
 
     // Extract 24-bit value (little endian): [0]=LSB, [1]=MSB, [2]=VALID+CRC
     uint32_t h_val = ((uint32_t)i2c_data[0]) | 
@@ -149,6 +172,7 @@ void ens210_read_envir(void){
         
         float H = (float)h_data / 512.0f; // Relative humidity in % (1/512 %RH per LSB)
         humidity_percentage = H;
+        humidity_valid = true;
         ESP_LOGD("ens210", "Humidity: %2.0f%%", H);
     } else {
         ESP_LOGW("ens210", "Humidity data not valid");
