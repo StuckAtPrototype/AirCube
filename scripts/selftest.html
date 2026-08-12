@@ -11,7 +11,7 @@
     <pre id="results">running...</pre>
     <div id="app"></div>
     <script type="module">
-      import { Device } from "../web/js/devices.js";
+      import { Device, DeviceRegistry } from "../web/js/devices.js";
       import { HomeView } from "../web/js/views/home.js";
       import { DetailView } from "../web/js/views/detail.js";
       import { SettingsView } from "../web/js/views/settings.js";
@@ -229,6 +229,25 @@
         if (!toggleEl.disabled) throw new Error("toggle should be disabled on Base");
         return "auto-dim disabled";
       });
+
+      // Disconnect has to revoke the port grant, or getPorts() hands the cube
+      // straight back on the next load and the registry re-adopts it.
+      (async () => {
+        try {
+          const registry = new DeviceRegistry();
+          let forgotten = false;
+          const port = { forget: async () => { forgotten = true; } };
+          const dev = new Device(port, 0);
+          registry.devices.push(dev);
+          await registry.forget(dev);
+          if (!forgotten) throw new Error("port.forget() was never called");
+          if (registry.devices.length) throw new Error("device still listed");
+          if (registry._nextSlot() !== 0) throw new Error("slot was not freed");
+          results.push("PASS disconnect forgets the port and frees its slot");
+        } catch (err) {
+          results.push(`FAIL disconnect forgets the port :: ${err.stack || err}`);
+        }
+      })();
 
       setTimeout(() => {
         document.querySelector("#results").textContent = results.join("\n");

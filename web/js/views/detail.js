@@ -313,7 +313,7 @@ export class DetailView {
 
   async _disconnect() {
     try {
-      await this.device.disconnect();
+      await this.registry.forget(this.device);
       this.onBack();
     } catch (err) {
       toast(err.message, "err");

@@ -279,7 +279,6 @@ export class DeviceRegistry extends EventTarget {
   constructor() {
     super();
     this.devices = [];
-    this._slotCounter = 0;
   }
 
   get supported() {
@@ -320,7 +319,7 @@ export class DeviceRegistry extends EventTarget {
       return existing;
     }
 
-    const device = new Device(port, this._slotCounter++);
+    const device = new Device(port, this._nextSlot());
     device.addEventListener("change", () => this._changed());
     this.devices.push(device);
     try {
@@ -331,6 +330,34 @@ export class DeviceRegistry extends EventTarget {
     }
     this._changed();
     return device;
+  }
+
+  /** Lowest unused slot, so forgetting a cube frees its name for the next one. */
+  _nextSlot() {
+    const used = new Set(this.devices.map((d) => d.slot));
+    let slot = 0;
+    while (used.has(slot)) slot++;
+    return slot;
+  }
+
+  /**
+   * Drop a cube for good.
+   *
+   * Closing the link is not enough: the browser keeps the port permission, so
+   * getPorts() hands it back on the next load and init() adopts it again.
+   * forget() revokes the grant, which means reconnecting needs a fresh trip
+   * through the browser's device picker.
+   */
+  async forget(device) {
+    await device.disconnect().catch(() => {});
+    try {
+      await device.port.forget?.();
+    } catch {
+      // Chrome before 103 has no SerialPort.forget(); the cube still goes
+      // away for this session, it just comes back on the next load.
+    }
+    this.devices = this.devices.filter((d) => d !== device);
+    this._changed();
   }
 
   _drop(device) {
