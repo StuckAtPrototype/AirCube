@@ -187,15 +187,23 @@ export class HistoryChart {
     this.plot = null;
     this.data = [[], []];
     this.format = (v) => String(v);
+    this.pendingRender = false;
 
     this.observer = new ResizeObserver(() => this._resize());
     this.observer.observe(host);
   }
 
   _resize() {
-    if (!this.plot) return;
     const { width, height } = this._size();
-    if (width > 0 && height > 0) this.plot.setSize({ width, height });
+    if (width === 0 || height === 0) return;
+    // A view that renders while still hidden measures zero and cannot build a
+    // plot. Becoming measurable is the only signal that it can be built now,
+    // and callers have no reason to ask for a second render.
+    if (this.pendingRender) {
+      this._render();
+      return;
+    }
+    if (this.plot) this.plot.setSize({ width, height });
   }
 
   _size() {
@@ -238,7 +246,11 @@ export class HistoryChart {
       this.plot = null;
     }
     const { width, height } = this._size();
-    if (width === 0 || height === 0) return;
+    if (width === 0 || height === 0) {
+      this.pendingRender = true;
+      return;
+    }
+    this.pendingRender = false;
 
     const stroke = this.color;
     const grid = cssVar(this.host, "--card-border");

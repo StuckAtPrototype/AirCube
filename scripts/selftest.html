@@ -194,6 +194,33 @@
         return `peak=${stats[0]} avg=${stats[1]} low=${stats[2]}`;
       });
 
+      // Clicking into a cube renders the detail view before the router marks
+      // its route active, so the chart measures zero. It has to build itself
+      // once it becomes visible, or it stays blank until the metric is toggled.
+      (async () => {
+        try {
+          const detail = new DetailView(registry, { onBack() {}, onFlash() {} });
+          const route = document.createElement("div");
+          route.style.display = "none";
+          route.append(detail.el);
+          document.body.append(route);
+          detail.el.style.height = "600px";
+
+          detail.setDevice(device);
+          detail.refreshHistory(true);
+          if (detail.chart.plot) throw new Error("built a plot while hidden");
+
+          route.style.display = "";
+          // ResizeObserver reports on a later frame.
+          await new Promise((r) => setTimeout(r, 120));
+          if (!detail.chart.plot) throw new Error("chart still blank after being shown");
+
+          results.push("PASS a chart rendered while hidden builds once shown");
+        } catch (err) {
+          results.push(`FAIL a chart rendered while hidden :: ${err.stack || err}`);
+        }
+      })();
+
       // A sync takes seconds; an empty chart with no explanation reads as a
       // failure, so the fetching state has to win over "No history".
       check("syncing shows the fetching overlay, not an empty chart", () => {
