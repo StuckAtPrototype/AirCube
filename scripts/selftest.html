@@ -306,6 +306,37 @@
         }
       })();
 
+      // A cube has no USB serial number, so a reset hands the browser a brand
+      // new SerialPort for the same hardware. Adopting it blindly is what
+      // spawned phantom cubes after a firmware update.
+      (async () => {
+        try {
+          const registry = new DeviceRegistry();
+          const original = new Device({ id: "old" }, 0);
+          original.rename("Bench cube");
+          registry.devices.push(original);
+          original.addEventListener("change", () => {});
+
+          await original.holdForFlash();
+          await original.releaseFlashHold();
+          if (!original.inFlashGrace) throw new Error("grace window not open");
+
+          // The port that comes back after the reset is a different object.
+          const rebooted = { id: "new" };
+          const adopted = await registry._adopt(rebooted);
+
+          if (registry.devices.length !== 1) {
+            throw new Error(`${registry.devices.length} cubes listed, expected 1`);
+          }
+          if (adopted !== original) throw new Error("listed a second cube");
+          if (adopted.port !== rebooted) throw new Error("still bound to the dead port");
+          if (adopted.name !== "Bench cube") throw new Error(`lost its name: ${adopted.name}`);
+          results.push("PASS a rebooted cube rebinds instead of duplicating");
+        } catch (err) {
+          results.push(`FAIL a rebooted cube rebinds :: ${err.stack || err}`);
+        }
+      })();
+
       setTimeout(() => {
         document.querySelector("#results").textContent = results.join("\n");
       }, 400);

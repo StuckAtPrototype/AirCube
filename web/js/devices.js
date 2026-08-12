@@ -67,12 +67,32 @@ export class Device extends EventTarget {
     // instead of dropping it out from under the reconnect.
     this.flashGraceUntil = 0;
 
+    this._wireLink();
+  }
+
+  _wireLink() {
     this.link.addEventListener("live", (e) => this._onLive(e.detail));
     this.link.addEventListener("config", (e) => this._onConfig(e.detail));
     this.link.addEventListener("closed", () => {
       this.isConnected = false;
       this._changed();
     });
+  }
+
+  /**
+   * Adopt the port this cube came back on.
+   *
+   * A reset re-enumerates the USB interface, and because the cube reports no
+   * serial number the browser cannot recognise it as the same device: it hands
+   * back a fresh SerialPort rather than the original. Rebinding keeps the
+   * cube's name, history and slot instead of listing it twice.
+   */
+  rebind(port) {
+    this.port = port;
+    this.link = new SerialLink(port);
+    this._wireLink();
+    this.isConnected = false;
+    this._changed();
   }
 
   get isOnline() {
@@ -288,7 +308,14 @@ export class DeviceRegistry extends EventTarget {
   async init() {
     if (!this.supported) return;
     const ports = await navigator.serial.getPorts();
-    for (const port of ports) await this._adopt(port);
+    for (const port of ports) {
+      // Each re-enumeration leaves another permission grant behind, since the
+      // browser has no serial number to recognise a returning cube by. Those
+      // dead grants are still handed back here, and adopting them is what
+      // listed cubes that are not plugged in.
+      if (port.connected === false) continue;
+      await this._adopt(port);
+    }
 
     navigator.serial.addEventListener("connect", (e) => {
       this._adopt(e.target).catch(() => {});
@@ -317,6 +344,21 @@ export class DeviceRegistry extends EventTarget {
         this._changed();
       }
       return existing;
+    }
+
+    // A cube that just rebooted arrives as a different SerialPort object, so
+    // give the new port to the one still waiting for it rather than listing a
+    // second copy of the same cube.
+    const returning = this.devices.find((d) => d.inFlashGrace && !d.isConnected);
+    if (returning) {
+      returning.rebind(port);
+      const reconnected = await returning
+        .connect()
+        .then(() => true)
+        .catch(() => false);
+      if (reconnected) returning.endFlashGrace();
+      this._changed();
+      return returning;
     }
 
     const device = new Device(port, this._nextSlot());

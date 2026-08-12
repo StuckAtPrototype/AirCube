@@ -17,6 +17,25 @@ export const APP_ONLY_ADDRESS = 0x10000;
 const EXPECTED_CHIP = /ESP32-H2/i;
 
 /**
+ * Restart the cube into the firmware that was just written.
+ *
+ * esptool-js's own "hard_reset" only lowers RTS, which assumes an external
+ * USB-UART bridge still holding EN asserted from the connect sequence. The
+ * AirCube talks over the ESP32-H2's built-in USB Serial/JTAG, where EN has to
+ * be strobed instead. DTR stays low so IO0 is released and the chip boots the
+ * application rather than the bootloader again; without this the cube sits in
+ * download mode until it is physically unplugged.
+ *
+ * @param {import("../vendor/esptool-js/bundle.js").Transport} transport
+ */
+async function rebootIntoApp(transport) {
+  await transport.setDTR(false);
+  await transport.setRTS(true);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  await transport.setRTS(false);
+}
+
+/**
  * @param {object} options
  * @param {import("./devices.js").Device} options.device
  * @param {Uint8Array} options.image
@@ -77,7 +96,7 @@ export async function flashDevice({
     });
 
     log("Resetting the device...");
-    await loader.after("hard_reset");
+    await rebootIntoApp(transport);
     log("Done. The AirCube is rebooting into the new firmware.", "ok");
   } finally {
     try {
