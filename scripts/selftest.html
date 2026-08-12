@@ -337,9 +337,52 @@
         }
       })();
 
+      // Plugging in a cube that has been paired before hands the browser one
+      // permission grant per past enumeration, all pointing at the same
+      // hardware. Only the first opens; the rest must not become ghost cubes.
+      (async () => {
+        try {
+          const registry = new DeviceRegistry();
+          let opened = 0;
+          const port = (works) => ({
+            open: async () => {
+              if (!works) throw new Error("Failed to open serial port.");
+              opened++;
+            },
+            readable: null,
+            writable: null,
+            close: async () => {},
+            setSignals: async () => {},
+          });
+
+          const real = await registry._adopt(port(true));
+          const ghostA = await registry._adopt(port(false));
+          const ghostB = await registry._adopt(port(false));
+
+          if (!real) throw new Error("the working cube was not listed");
+          if (ghostA || ghostB) throw new Error("a refused port produced a cube");
+          if (registry.devices.length !== 1) {
+            throw new Error(`${registry.devices.length} cubes listed, expected 1`);
+          }
+
+          // An explicit pick should still surface why it failed.
+          let reported = "";
+          try {
+            await registry._adopt(port(false), { reportFailure: true });
+          } catch (err) {
+            reported = err.message;
+          }
+          if (!reported) throw new Error("explicit pick swallowed the failure");
+
+          results.push(`PASS refused ports do not become ghost cubes :: opened=${opened}`);
+        } catch (err) {
+          results.push(`FAIL refused ports do not become ghost cubes :: ${err.stack || err}`);
+        }
+      })();
+
       setTimeout(() => {
         document.querySelector("#results").textContent = results.join("\n");
-      }, 400);
+      }, 2500);
     </script>
   </body>
 </html>

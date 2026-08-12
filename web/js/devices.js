@@ -331,12 +331,14 @@ export class DeviceRegistry extends EventTarget {
   async requestPort({ anyDevice = false } = {}) {
     const options = anyDevice ? {} : { filters: [proto.AIRCUBE_USB_FILTER] };
     const port = await navigator.serial.requestPort(options);
-    const device = await this._adopt(port);
+    // The user picked this port deliberately, so a refusal to open is worth
+    // reporting rather than silently dropping.
+    const device = await this._adopt(port, { reportFailure: true });
     this._changed();
     return device;
   }
 
-  async _adopt(port) {
+  async _adopt(port, { reportFailure = false } = {}) {
     const existing = this.devices.find((d) => d.port === port);
     if (existing) {
       if (!existing.isConnected && !existing.heldForFlash) {
@@ -361,17 +363,37 @@ export class DeviceRegistry extends EventTarget {
       return returning;
     }
 
+    // Only list a cube once its port actually opens. Because a cube carries no
+    // serial number, every re-enumeration leaves behind another permission
+    // grant, and all of them point at the same hardware: the first port opens
+    // and the rest are refused. Listing the refusals is what put ghost cubes on
+    // the home screen. A port the browser will not open is not a cube anyone
+    // can use, whatever the reason.
     const device = new Device(port, this._nextSlot());
+    try {
+      await this._openWithRetry(device);
+    } catch (err) {
+      if (reportFailure) throw err;
+      return null;
+    }
+
     device.addEventListener("change", () => this._changed());
     this.devices.push(device);
-    try {
-      await device.connect();
-    } catch (err) {
-      // A port already claimed by another tab or app stays listed but offline.
-      device.syncError = err.message || String(err);
-    }
     this._changed();
     return device;
+  }
+
+  /** A cube that has only just enumerated can refuse the first open. */
+  async _openWithRetry(device, attempts = 3, delayMs = 350) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await device.connect();
+        return;
+      } catch (err) {
+        if (attempt >= attempts) throw err;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
   }
 
   /** Lowest unused slot, so forgetting a cube frees its name for the next one. */
