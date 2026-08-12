@@ -1,0 +1,167 @@
+/* AirCube design tokens.
+ *
+ * Verbatim port of the palette in AirCube_iOS/AirCube/Theme.swift, which the
+ * desktop tray also ports in aircubeapp/theme.py. Colour is reserved for
+ * communicating air quality; every other surface stays neutral.
+ *
+ * Each colour is declared twice: as a hex value for direct use, and as a bare
+ * "R, G, B" triplet so it can be used with an alpha channel without relying on
+ * relative-colour syntax.
+ */
+
+:root {
+  --font: "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+
+  --card-radius: 24px;
+  --card-pad: 18px;
+  --section-gap: 14px;
+  --tile-gap: 12px;
+
+  /* fixed across both appearances */
+  --accent: #8b5cf6;
+  --accent-rgb: 139, 92, 246;
+  --accent-soft: #c084fc;
+  --accent-soft-rgb: 192, 132, 252;
+}
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #09080d;
+  --card: #15121c;
+  --card-top: #181420;
+  --card-bottom: #120f19;
+  --card-bottom-rgb: 18, 15, 25;
+  --card-border: #24202d;
+  --card-border-rgb: 36, 32, 45;
+  --text: #f5f2fa;
+  --text-rgb: 245, 242, 250;
+  --muted: #9a93a8;
+  --faint: #746d82;
+
+  --pill-track: #0f0d15;
+  --pill-selected: #2b2635;
+
+  --m-temp: #e887b8;
+  --m-temp-rgb: 232, 135, 184;
+  --m-hum: #5bb8f0;
+  --m-hum-rgb: 91, 184, 240;
+  --m-voc: #3de0a0;
+  --m-voc-rgb: 61, 224, 160;
+  --m-eco2: #a78bfa;
+  --m-eco2-rgb: 167, 139, 250;
+  --m-etvoc: #2dd4bf;
+  --m-etvoc-rgb: 45, 212, 191;
+  --m-co2: #ff9445;
+  --m-co2-rgb: 255, 148, 69;
+  --m-lux: #ffd23f;
+  --m-lux-rgb: 255, 210, 63;
+
+  --q-good: #3de0a0;
+  --q-good-rgb: 61, 224, 160;
+  --q-warn: #ffc94d;
+  --q-warn-rgb: 255, 201, 77;
+  --q-bad: #ff9445;
+  --q-bad-rgb: 255, 148, 69;
+  --q-crit: #ff6b6b;
+  --q-crit-rgb: 255, 107, 107;
+
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f4f2f8;
+  --card: #ffffff;
+  --card-top: #ffffff;
+  --card-bottom: #faf8fd;
+  --card-bottom-rgb: 250, 248, 253;
+  --card-border: #e4e0ec;
+  --card-border-rgb: 228, 224, 236;
+  --text: #1b1626;
+  --text-rgb: 27, 22, 38;
+  --muted: #6e6680;
+  --faint: #9a93a8;
+
+  --pill-track: #e9e5f1;
+  --pill-selected: #ffffff;
+
+  --m-temp: #d1568f;
+  --m-temp-rgb: 209, 86, 143;
+  --m-hum: #2493d6;
+  --m-hum-rgb: 36, 147, 214;
+  --m-voc: #11a874;
+  --m-voc-rgb: 17, 168, 116;
+  --m-eco2: #8163e8;
+  --m-eco2-rgb: 129, 99, 232;
+  --m-etvoc: #0fa08b;
+  --m-etvoc-rgb: 15, 160, 139;
+  --m-co2: #e87420;
+  --m-co2-rgb: 232, 116, 32;
+  --m-lux: #d9a800;
+  --m-lux-rgb: 217, 168, 0;
+
+  --q-good: #11a874;
+  --q-good-rgb: 17, 168, 116;
+  --q-warn: #d79a17;
+  --q-warn-rgb: 215, 154, 23;
+  --q-bad: #e87420;
+  --q-bad-rgb: 232, 116, 32;
+  --q-crit: #e04f4f;
+  --q-crit-rgb: 224, 79, 79;
+
+  --shadow: 0 10px 30px rgba(27, 22, 38, 0.08);
+}
+
+/* Quality classes set --q / --q-rgb so pills, dots, gauges and hero gradients
+ * can all tint themselves from one source. AirQuality.GOOD/FAIR/POOR/BAD map
+ * onto good/warn/bad/crit exactly as theme.py's _QUALITY_KEY does. */
+.q-good {
+  --q: var(--q-good);
+  --q-rgb: var(--q-good-rgb);
+}
+.q-fair {
+  --q: var(--q-warn);
+  --q-rgb: var(--q-warn-rgb);
+}
+.q-poor {
+  --q: var(--q-bad);
+  --q-rgb: var(--q-bad-rgb);
+}
+.q-bad {
+  --q: var(--q-crit);
+  --q-rgb: var(--q-crit-rgb);
+}
+.q-none {
+  --q: var(--faint);
+  --q-rgb: var(--card-border-rgb);
+}
+
+/* Metric accent classes, used by tiles, sparklines and the history chart. */
+.m-co2 {
+  --m: var(--m-co2);
+  --m-rgb: var(--m-co2-rgb);
+}
+.m-voc {
+  --m: var(--m-voc);
+  --m-rgb: var(--m-voc-rgb);
+}
+.m-temp {
+  --m: var(--m-temp);
+  --m-rgb: var(--m-temp-rgb);
+}
+.m-hum {
+  --m: var(--m-hum);
+  --m-rgb: var(--m-hum-rgb);
+}
+.m-eco2 {
+  --m: var(--m-eco2);
+  --m-rgb: var(--m-eco2-rgb);
+}
+.m-lux {
+  --m: var(--m-lux);
+  --m-rgb: var(--m-lux-rgb);
+}

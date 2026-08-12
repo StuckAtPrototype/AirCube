@@ -136,6 +136,10 @@ By default, the SmartThings app may only show **temperature** and **humidity** u
 
 Plug the AirCube into your computer with a **data-capable USB-C cable** to see live readings, charts, and history.
 
+### In your browser -- nothing to install
+
+**[AirCube Web](https://stuckatprototype.github.io/AirCube/)** connects over USB straight from Chrome or Edge: live readings, LED brightness, history with CSV export, and firmware updates. Click **Connect**, pick your cube, and you're in.
+
 ### Download the app
 
 Check the [Releases](https://github.com/StuckAtPrototype/AirCube/releases) page for a ready-to-run Windows `.exe` -- no install required.
@@ -159,7 +163,7 @@ Select your serial port, click **Connect**, and you'll see live data.
 
 New firmware releases add features and fix bugs. Updating takes a couple of minutes with just a browser -- no tools to install.
 
-**[Firmware Update Guide](FIRMWARE_UPDATE.md)** -- step-by-step instructions.
+**[Flash it now with AirCube Web](https://stuckatprototype.github.io/AirCube/)** or read the **[Firmware Update Guide](FIRMWARE_UPDATE.md)** for step-by-step instructions.
 
 Latest release: [GitHub Releases](https://github.com/StuckAtPrototype/AirCube/releases)
 
@@ -261,6 +265,7 @@ AirCube is fully open source -- firmware, PCB design, enclosure, desktop softwar
 | [Assembly Guide](ASSEMBLY.md) | Assemble the printed enclosure -- Base and Pro |
 | [BLE GATT Protocol](docs/BLE_GATT_PROTOCOL.md) | BLE GATT protocol reference for building custom BLE clients |
 | [Firmware Update Guide](FIRMWARE_UPDATE.md) | Update your AirCube firmware from a browser |
+| [AirCube Web](web/) | The browser app: Web Serial monitoring, settings and flashing |
 | [Home Assistant Guide](HOME_ASSISTANT.md) | ZHA and Zigbee2MQTT setup |
 | [Samsung hub integration](SMARTTHINGS.md) | Community-contributed: Edge driver, CLI setup (see **[Community extensions](#community-extensions)**) |
 | [GitHub Issues](https://github.com/StuckAtPrototype/AirCube/issues) | Bug reports and feature requests |

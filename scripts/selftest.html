@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <title>AirCube Web self-test</title>
+    <link rel="stylesheet" href="../web/vendor/uplot/uPlot.min.css" />
+    <link rel="stylesheet" href="../web/css/theme.css" />
+    <link rel="stylesheet" href="../web/css/app.css" />
+  </head>
+  <body>
+    <pre id="results">running...</pre>
+    <div id="app"></div>
+    <script type="module">
+      import { Device } from "../web/js/devices.js";
+      import { HomeView } from "../web/js/views/home.js";
+      import { DetailView } from "../web/js/views/detail.js";
+      import { SettingsView } from "../web/js/views/settings.js";
+      import { parseLive, parseHistorySlot, parseConfig } from "../web/js/protocol.js";
+      import { airScore, readingQuality, historySegments } from "../web/js/quality.js";
+
+      if (location.search.includes("light")) document.documentElement.dataset.theme = "light";
+
+      const results = [];
+      const check = (name, fn) => {
+        try {
+          const detail = fn();
+          results.push(`PASS ${name}${detail ? ` :: ${detail}` : ""}`);
+        } catch (err) {
+          results.push(`FAIL ${name} :: ${err.stack || err}`);
+        }
+      };
+
+      window.addEventListener("error", (e) => results.push(`WINDOW ERROR :: ${e.message}`));
+
+      // --- synthetic device -------------------------------------------------
+      const device = new Device({}, 0);
+      device.isConnected = true;
+
+      const proLine = {
+        model: "pro",
+        ens210: { status: 0, temperature_c: 23.45, temperature_f: 74.21, humidity: 52.3 },
+        ens16x: { status: "OK", etvoc: 742, eco2: 415, aqi: 3, aqi_s: 0, aqi_uba: 1 },
+        scd41: { co2: 1310 },
+        vcnl4040: { lux: 84.2 },
+        timestamp: 12345,
+      };
+
+      check("parseLive maps Pro fields", () => {
+        const r = parseLive(proLine);
+        if (r.etvoc !== 742) throw new Error(`etvoc ${r.etvoc}`);
+        if (r.vocLevel !== 3) throw new Error(`vocLevel ${r.vocLevel}`);
+        if (r.co2 !== 1310) throw new Error(`co2 ${r.co2}`);
+        if (!r.isPro) throw new Error("not pro");
+        return `etvoc=${r.etvoc} co2=${r.co2} lux=${r.lux}`;
+      });
+
+      check("quality follows the worse of VOC and CO2", () => {
+        const r = parseLive(proLine);
+        // etvoc 742 -> POOR(2); co2 1310 -> POOR(2)
+        const q = readingQuality(r);
+        const score = airScore(r);
+        if (q !== 2) throw new Error(`quality ${q}`);
+        if (score < 50 || score > 75) throw new Error(`score ${score}`);
+        return `quality=${q} score=${score}`;
+      });
+
+      check("Base falls back to eCO2 and estimates Pro from co2", () => {
+        const r = parseLive({ ens210: { temperature_c: 21, humidity: 40 }, ens16x: { etvoc: 100, eco2: 500, aqi: 1 } });
+        if (r.isPro) throw new Error("should be Base");
+        if (r.eco2 !== 500) throw new Error(`eco2 ${r.eco2}`);
+        return `base eco2=${r.eco2}`;
+      });
+
+      check("parseConfig reads auto-dim", () => {
+        const c = parseConfig({ intensity: 0.6, readout_period: 1000, auto_dim: { enabled: true, night_enter_lux: 5, day_exit_lux: 15, night_dim_pct: 10 } });
+        if (c.autoDim.nightDimPct !== 10) throw new Error("night dim");
+        return `intensity=${c.intensity} period=${c.readoutPeriod}`;
+      });
+
+      device._onLive(parseLive(proLine));
+      device._onConfig(parseConfig({ intensity: 0.6, readout_period: 1000, auto_dim: { enabled: true, night_enter_lux: 5, day_exit_lux: 15, night_dim_pct: 10 } }));
+
+      // 3 days of 5-minute history with a deliberate gap
+      const raw = [];
+      for (let i = 0; i < 864; i++) {
+        if (i > 300 && i < 340) continue;
+        raw.push({
+          seq: i,
+          t_a: 2200 + Math.round(Math.sin(i / 20) * 300),
+          t_n: 2100, t_x: 2400,
+          h_a: 4800 + Math.round(Math.cos(i / 15) * 400),
+          h_n: 4500, h_x: 5200,
+          q_a: 3, q_n: 1, q_x: 5,
+          c_a: 700 + Math.round(Math.sin(i / 30) * 250),
+          c_n: 600, c_x: 1100,
+          v_a: 400 + Math.round(Math.cos(i / 25) * 200),
+          v_n: 200, v_x: 900,
+        });
+      }
+      check("parseHistorySlot scales x100 fields", () => {
+        const s = parseHistorySlot(raw[0]);
+        if (Math.abs(s.tempAvg - 22) > 0.001) throw new Error(`tempAvg ${s.tempAvg}`);
+        return `tempAvg=${s.tempAvg} humAvg=${s.humAvg}`;
+      });
+      check("SEQ_NONE slots are dropped", () => {
+        if (parseHistorySlot({ seq: 65535 }) !== null) throw new Error("should be null");
+        return "ok";
+      });
+
+      device._anchorAndStore(raw.map(parseHistorySlot).filter(Boolean));
+      device.lastSyncedAt = Date.now() / 1000;
+
+      check("history is anchored newest-at-now", () => {
+        const newest = device.slots[device.slots.length - 1];
+        const oldest = device.slots[0];
+        const spanHours = (newest.timestamp - oldest.timestamp) / 3600;
+        if (Math.abs(newest.timestamp - Date.now() / 1000) > 5) throw new Error("newest not anchored to now");
+        if (spanHours < 60) throw new Error(`span only ${spanHours}h`);
+        return `${device.slots.length} slots spanning ${spanHours.toFixed(1)}h`;
+      });
+
+      check("segments split across the gap", () => {
+        const segments = historySegments(device.slots);
+        if (segments.length !== 2) throw new Error(`got ${segments.length} segments`);
+        return `${segments.length} segments`;
+      });
+
+      // --- views ------------------------------------------------------------
+      const registry = {
+        devices: [device],
+        supported: true,
+        byId: (id) => (id === device.id ? device : null),
+        addEventListener() {},
+      };
+
+      const app = document.querySelector("#app");
+
+      check("HomeView renders a device card", () => {
+        const home = new HomeView(registry, { onOpenDetail() {}, onOpenSettings() {}, onConnect() {} });
+        app.append(home.el);
+        home.refresh();
+        home.refresh(); // second pass exercises the update path
+        const card = home.el.querySelector(".device-card");
+        if (!card) throw new Error("no card");
+        const status = card.querySelector(".row.header .pill:last-of-type").textContent;
+        const voc = card.querySelector(".primary-metrics .value").textContent;
+        if (voc !== "742") throw new Error(`voc cell ${voc}`);
+        return `status="${status}" voc=${voc}`;
+      });
+
+      check("DetailView renders hero, tiles and chart", () => {
+        const detail = new DetailView(registry, { onBack() {}, onFlash() {} });
+        app.append(detail.el);
+        detail.el.style.height = "900px";
+        detail.setDevice(device);
+        detail.refresh();
+        detail.refresh();
+        const hero = detail.el.querySelector(".hero-title").textContent;
+        const co2Caption = detail.el.querySelector(".metric-tile .caption").textContent;
+        const co2Value = detail.el.querySelector(".metric-tile .value").textContent;
+        const gaugeScore = detail.el.querySelector(".gauge text:nth-of-type(2)").textContent;
+        if (co2Caption !== "CO2") throw new Error(`caption ${co2Caption}`);
+        if (co2Value !== "1310 ppm") throw new Error(`value ${co2Value}`);
+        return `hero="${hero}" tile=${co2Value} gauge=${gaugeScore}`;
+      });
+
+      check("history chart produced data", () => {
+        const detail = new DetailView(registry, { onBack() {}, onFlash() {} });
+        const host = document.createElement("div");
+        host.style.cssText = "width:800px;height:300px";
+        document.body.append(host);
+        app.append(detail.el);
+        detail.setDevice(device);
+        detail.refreshHistory(true);
+        const stats = [...detail.el.querySelectorAll(".stats-row .value")].map((n) => n.textContent);
+        if (stats[0] === "--") throw new Error("no stats computed");
+        return `peak=${stats[0]} avg=${stats[1]} low=${stats[2]}`;
+      });
+
+      check("metric switch to temperature reformats", () => {
+        const detail = new DetailView(registry, { onBack() {}, onFlash() {} });
+        app.append(detail.el);
+        detail.setDevice(device);
+        detail.metric = { key: "temp", label: "Temperature", unit: "°", colorClass: "m-temp", decimals: 1 };
+        detail.refreshHistory(true);
+        const peak = detail.el.querySelector(".stats-row .value").textContent;
+        if (!peak.includes("°F")) throw new Error(`peak "${peak}" not in F`);
+        return `peak=${peak}`;
+      });
+
+      check("SettingsView renders device settings", () => {
+        const settings = new SettingsView(registry, { onBack() {}, onFlash() {} });
+        app.append(settings.el);
+        settings.refresh();
+        settings.refresh();
+        const rows = settings.el.querySelectorAll(".settings-row");
+        const labels = [...rows].map((r) => r.querySelector(".label div").textContent);
+        if (!labels.includes("Auto-dim at night")) throw new Error(`labels ${labels.join("|")}`);
+        return `${rows.length} rows`;
+      });
+
+      check("Base hardware disables auto-dim controls", () => {
+        const base = new Device({}, 1);
+        base.isConnected = true;
+        base._onLive(parseLive({ model: "base", ens210: { temperature_c: 20, humidity: 45 }, ens16x: { etvoc: 90, eco2: 500, aqi: 1 } }));
+        base._onConfig(parseConfig({ intensity: 0.3, readout_period: 1000, auto_dim: {} }));
+        const reg = { devices: [base], supported: true, byId: () => base, addEventListener() {} };
+        const settings = new SettingsView(reg, { onBack() {}, onFlash() {} });
+        document.body.append(settings.el);
+        settings.refresh();
+        const toggleEl = settings.el.querySelector(".settings-row .toggle");
+        if (!toggleEl.disabled) throw new Error("toggle should be disabled on Base");
+        return "auto-dim disabled";
+      });
+
+      setTimeout(() => {
+        document.querySelector("#results").textContent = results.join("\n");
+      }, 400);
+    </script>
+  </body>
+</html>

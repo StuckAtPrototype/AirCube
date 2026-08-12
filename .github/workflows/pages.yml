@@ -1,0 +1,53 @@
+name: Deploy AirCube Web
+
+# Publishes web/ to GitHub Pages, staging the newest firmware release binaries
+# alongside it so the browser can fetch them same-origin.
+#
+# One-time setup: repository Settings -> Pages -> Source: GitHub Actions.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "web/**"
+      - "scripts/build_web_manifest.py"
+      - ".github/workflows/pages.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage firmware releases and build the manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/build_web_manifest.py
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

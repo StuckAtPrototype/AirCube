@@ -27,3 +27,6 @@ scripts/build/
 
 # Local release staging
 releases/
+
+# Firmware binaries staged into the web flasher by scripts/build_web_manifest.py
+web/firmware/*.bin
