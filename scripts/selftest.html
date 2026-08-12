@@ -194,6 +194,36 @@
         return `peak=${stats[0]} avg=${stats[1]} low=${stats[2]}`;
       });
 
+      // A sync takes seconds; an empty chart with no explanation reads as a
+      // failure, so the fetching state has to win over "No history".
+      check("syncing shows the fetching overlay, not an empty chart", () => {
+        const detail = new DetailView(registry, { onBack() {}, onFlash() {} });
+        app.append(detail.el);
+        detail.setDevice(device);
+
+        device.isSyncing = true;
+        device.syncProgress = { current: 320, total: 2016 };
+        detail.refreshSync();
+        detail.refreshHistory(true);
+        const loading = detail.el.querySelector(".chart-loading");
+        const title = loading.querySelector(".chart-loading-title").textContent;
+        const sub = loading.querySelector(".chart-loading-sub").textContent;
+        if (loading.style.display === "none") throw new Error("overlay hidden while syncing");
+        if (!loading.querySelector(".spinner")) throw new Error("no spinner");
+        if (title !== "Fetching data") throw new Error(`title "${title}"`);
+        if (sub !== "320 of 2016 entries") throw new Error(`sub "${sub}"`);
+        if (detail.el.querySelector(".chart-empty").style.display !== "none") {
+          throw new Error("empty message shown during sync");
+        }
+
+        device.isSyncing = false;
+        detail.refreshSync();
+        if (detail.el.querySelector(".chart-loading").style.display !== "none") {
+          throw new Error("overlay still up after sync");
+        }
+        return `title="${title}" sub="${sub}"`;
+      });
+
       check("metric switch to temperature reformats", () => {
         const detail = new DetailView(registry, { onBack() {}, onFlash() {} });
         app.append(detail.el);

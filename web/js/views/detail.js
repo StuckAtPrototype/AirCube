@@ -187,6 +187,16 @@ export class DetailView {
 
     this.chartHost = h("div.chart-host");
     this.chartEmpty = h("div.chart-empty", { text: "No history for this range." });
+    // A full pull is thousands of entries and takes a few seconds, which is
+    // long enough that a bare empty chart reads as breakage.
+    this.loadingDetail = h("div.chart-loading-sub", { text: "Reading history from the cube" });
+    this.chartLoading = h(
+      "div.chart-loading",
+      h("div.spinner"),
+      h("div.chart-loading-title", { text: "Fetching data" }),
+      this.loadingDetail,
+    );
+    this.chartLoading.style.display = "none";
     this.chartReadout = h("span.faint", { text: "Hover the chart to read values" });
     this.chart = new HistoryChart(this.chartHost, (point) => this._onScrub(point));
 
@@ -221,6 +231,7 @@ export class DetailView {
       h("div", { style: { position: "relative", flex: "1", minHeight: "0", display: "flex" } },
         this.chartHost,
         this.chartEmpty,
+        this.chartLoading,
       ),
       h("div.stats-row", ...this.stats.map((s) => s.el)),
       h("div.row", this.syncStatus, h("div.spacer"), this.syncBtn),
@@ -466,7 +477,7 @@ export class DetailView {
       now - this.rangeSeconds,
       now,
     ]);
-    this.chartEmpty.style.display = valid.length ? "none" : "";
+    this.chartEmpty.style.display = valid.length || device.isSyncing ? "none" : "";
 
     // 2-hour sparklines on the tiles (24 slots of 5 minutes).
     const spark = device.sparklineSlots(24);
@@ -527,10 +538,17 @@ export class DetailView {
     const device = this.device;
     if (!device) return;
     this.syncBar.style.visibility = device.isSyncing ? "" : "hidden";
+    this.chartLoading.style.display = device.isSyncing ? "" : "none";
     if (device.isSyncing) {
       const { current, total } = device.syncProgress;
       if (total > 0) this.syncBar.setFraction(current / total);
       else this.syncBar.setIndeterminate();
+      this.loadingDetail.textContent = total
+        ? `${current} of ${total} entries`
+        : "Reading history from the cube";
+      // Whatever the chart was showing, "no history" is the wrong message
+      // while we are still fetching it.
+      this.chartEmpty.style.display = "none";
     }
     this.syncBtn.disabled = device.isSyncing || !device.isConnected;
   }
