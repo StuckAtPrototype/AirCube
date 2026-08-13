@@ -157,6 +157,26 @@ void led_set_intensity(float intensity) {
     }
 }
 
+void led_restore_state(uint32_t color, float intensity)
+{
+    if (intensity < 0.0f) intensity = 0.0f;
+    if (intensity > 1.0f) intensity = 1.0f;
+
+    if (led_mutex != NULL && xSemaphoreTake(led_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        led_color = color;
+        led_intensity = intensity;
+        led_intensity_target = intensity;
+        xSemaphoreGive(led_mutex);
+    } else {
+        led_color = color;
+        led_intensity = intensity;
+        led_intensity_target = intensity;
+    }
+
+    // Do not wait for the LED task's next tick; restore the visible frame now.
+    led_render_frame(color, intensity);
+}
+
 /**
  * @brief Get current LED color
  * 

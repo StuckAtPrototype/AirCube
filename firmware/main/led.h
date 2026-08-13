@@ -56,6 +56,13 @@ void led_set_color(uint32_t color);
 void led_set_intensity(float intensity);
 
 /**
+ * @brief Restore color and displayed brightness without an animation.
+ *
+ * Used on warm MCU restarts so the brief radio recovery is not visible.
+ */
+void led_restore_state(uint32_t color, float intensity);
+
+/**
  * @brief Get current LED color
  * 
  * This function returns the current LED color in a thread-safe manner.

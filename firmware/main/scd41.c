@@ -438,7 +438,7 @@ bool scd41_get_raw_frame(scd41_raw_frame_t *out)
     return true;
 }
 
-void scd41_init(void)
+void scd41_init(bool resume_periodic)
 {
     if (scd41_lock == NULL) {
         scd41_lock = xSemaphoreCreateMutex();
@@ -468,6 +468,16 @@ void scd41_init(void)
     // emit alarming I2C error logs.
     if (!i2c_driver_probe(SCD41_I2C_ADDRESS)) {
         ESP_LOGI(TAG, "SCD41 not present");
+        return;
+    }
+
+    if (resume_periodic) {
+        // The SCD41 has its own power domain and continues measuring while only
+        // the ESP resets. Sending STOP/START here restarts its thermal settling
+        // and temporarily biases temperature high, so attach to the existing
+        // low-power periodic stream without issuing any sensor command.
+        scd41_present = true;
+        ESP_LOGI(TAG, "SCD41 warm resume; periodic measurement left running");
         return;
     }
 

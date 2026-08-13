@@ -58,6 +58,8 @@ static int  s_night_streak = 0;
 static int  s_day_streak = 0;
 static int64_t s_last_brightness_change_us = 0;
 static int64_t s_last_transition_us = 0;
+static bool s_restore_night_pending = false;
+static bool s_restored_night = false;
 
 static bool auto_dim_active(void)
 {
@@ -236,7 +238,8 @@ void auto_dim_init(void)
         s_config.enabled = false;
     }
 
-    s_is_night = false;
+    s_is_night = s_restore_night_pending ? s_restored_night : false;
+    s_restore_night_pending = false;
     s_night_streak = 0;
     s_day_streak = 0;
     s_effective_pct = -1;
@@ -249,6 +252,12 @@ void auto_dim_init(void)
              s_config.night_enter_lux, s_config.day_exit_lux, s_config.night_dim_pct);
 
     auto_dim_recompute();
+}
+
+void auto_dim_restore_night_state(bool is_night)
+{
+    s_restored_night = is_night;
+    s_restore_night_pending = true;
 }
 
 void auto_dim_update_lux(float lux)

@@ -14,11 +14,13 @@
 // pulling in the driver.
 #define SCD41_I2C_ADDRESS 0x62
 
-// Probe for the sensor, apply the static temperature offset, and start
-// low-power periodic measurement mode (~30-second CO2/RH/T updates).
+// Probe for the sensor. On a cold boot, apply the static temperature offset and
+// start low-power periodic measurement mode (~30-second CO2/RH/T updates).
+// When resume_periodic is true, the sensor retained power across an MCU reset
+// and its running measurement cycle is left untouched.
 // Safe to call on hardware that does not have the SCD41 fitted (Base model):
 // it will simply mark the sensor as not present.
-void scd41_init(void);
+void scd41_init(bool resume_periodic);
 
 // Returns true if the SCD41 was detected during scd41_init().
 bool scd41_is_present(void);

@@ -27,6 +27,9 @@ typedef struct {
 
 void auto_dim_init(void);
 
+// Restore the day/night latch before auto_dim_init() on a warm MCU restart.
+void auto_dim_restore_night_state(bool is_night);
+
 // Feed compensated ambient lux (Pro sensor loop). No-op on Base.
 void auto_dim_update_lux(float lux);
 

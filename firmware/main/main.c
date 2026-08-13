@@ -21,6 +21,7 @@
 #include "zigbee.h"
 #include "radio_mode.h"
 #include "ble_gatt.h"
+#include "restart_state.h"
 
 static const char *TAG = "main";
 
@@ -537,6 +538,16 @@ void sensor_task(void *pvParameters)
 
 void app_main(void)
 {
+    restart_state_init();
+    restart_visual_state_t restored_visual_state = {0};
+    bool restored_visual = restart_state_get_visual(&restored_visual_state);
+    if (restored_visual) {
+        current_hue = restored_visual_state.hue;
+        target_hue = (uint16_t)restored_visual_state.hue;
+        current_voc_level = restored_visual_state.voc_level;
+        current_co2_level = restored_visual_state.co2_level;
+    }
+
     ESP_LOGI(TAG, "AirCube");
 
     ESP_LOGI(TAG, "LED color: continuous green->red from canonical VOC Level (TVOC-derived)");
@@ -585,10 +596,15 @@ void app_main(void)
     
     // Initialize LED control system
     led_init();
-    
-    // Set initial LED color to green (animation start color) before animation
-    uint32_t start_color = get_color_from_hue(HUE_GREEN);
-    led_set_color(start_color);
+
+    if (restored_visual) {
+        led_restore_state(restored_visual_state.color, restored_visual_state.intensity);
+        ESP_LOGI(TAG, "Restored LED color and brightness after warm restart");
+    } else {
+        // Set initial LED color to green on an actual power-up.
+        uint32_t start_color = get_color_from_hue(HUE_GREEN);
+        led_set_color(start_color);
+    }
 
     
     // // Play startup animation (3 second sweep from green to red and back)
@@ -616,16 +632,21 @@ void app_main(void)
     ESP_LOGI(TAG, "ENS16X initialized");
 
     if (aircube_model_is_pro()) {
-        scd41_init();
+        scd41_init(restart_state_should_resume_scd41());
+        restart_state_set_scd41_running(scd41_is_present());
         ESP_LOGI(TAG, "SCD41 %s", scd41_is_present() ? "present" : "not present");
         vcnl4040_init();
         ESP_LOGI(TAG, "VCNL4040 %s", vcnl4040_is_present() ? "present" : "not present");
     } else {
+        restart_state_set_scd41_running(false);
         ens210_init();
         ESP_LOGI(TAG, "ENS210 %s", ens210_is_present() ? "present" : "not present");
     }
 
     // Apply configured brightness through auto-dim (Pro) or pass-through (Base).
+    if (restored_visual) {
+        auto_dim_restore_night_state(restored_visual_state.auto_dim_night);
+    }
     auto_dim_init();
     
     // BLE-first radio mode: exactly one radio stack runs per boot (BLE+Zigbee
@@ -639,12 +660,15 @@ void app_main(void)
     } else {
         // Connectable GATT service + BTHome advertising
         ble_gatt_init();
-        // Mode cue: two quick blue blinks when entering BLE mode
-        for (int i = 0; i < 2; i++) {
-            led_set_color(LED_COLOR_BLUE);
-            vTaskDelay(pdMS_TO_TICKS(120));
-            led_set_color(LED_COLOR_OFF);
-            vTaskDelay(pdMS_TO_TICKS(120));
+        // A warm radio recovery must not replace the restored air-quality color.
+        if (!restored_visual) {
+            // Mode cue: two quick blue blinks when entering BLE mode
+            for (int i = 0; i < 2; i++) {
+                led_set_color(LED_COLOR_BLUE);
+                vTaskDelay(pdMS_TO_TICKS(120));
+                led_set_color(LED_COLOR_OFF);
+                vTaskDelay(pdMS_TO_TICKS(120));
+            }
         }
     }
     
@@ -659,21 +683,20 @@ void app_main(void)
     ESP_LOGI(TAG, "Sensor task created");
 
     // Main loop for LED color based on VOC Level (with pairing override)
-    bool was_zb_connected = zigbee_is_connected();
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(20));  // Update LED every 20ms for smooth transitions
-        
-        // ── Mode cue: three quick green blinks when Zigbee joins ──
-        bool zb_connected = zigbee_is_connected();
-        if (zb_connected && !was_zb_connected) {
-            for (int i = 0; i < 3; i++) {
-                led_set_color(LED_COLOR_GREEN);
-                vTaskDelay(pdMS_TO_TICKS(120));
-                led_set_color(LED_COLOR_OFF);
-                vTaskDelay(pdMS_TO_TICKS(120));
-            }
-        }
-        was_zb_connected = zb_connected;
+
+        // Retain the exact frame and ramped brightness continuously in RTC RAM.
+        // This is zero-wear memory and makes a forced MCU restart visually seamless.
+        restart_visual_state_t live_visual = {
+            .color = led_get_color(),
+            .intensity = led_get_intensity(),
+            .hue = current_hue,
+            .voc_level = (uint16_t)current_voc_level,
+            .co2_level = (uint16_t)current_co2_level,
+            .auto_dim_night = auto_dim_is_night(),
+        };
+        restart_state_update_visual(&live_visual);
         
         // ── Pairing mode: flash blue at 2 Hz ──
         if (zigbee_is_pairing()) {
