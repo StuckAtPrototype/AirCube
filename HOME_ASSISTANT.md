@@ -4,6 +4,15 @@ This guide walks you through adding your AirCube air quality monitor to Home Ass
 
 The AirCube works with both **ZHA** (built-in) and **Zigbee2MQTT**. Pick whichever you already use. If you're starting fresh, ZHA is simpler.
 
+> **A note on names.** Home Assistant renamed a couple of things in 2026.2, so the menus below are listed with both names -- use whichever your version shows:
+>
+> | HA 2026.2 and newer | HA 2026.1 and earlier |
+> |---------------------|-----------------------|
+> | **Apps** / **App Store** | **Add-ons** / **Add-on Store** |
+> | **Settings > Zigbee** | **Settings > Devices & Services > ZHA** |
+>
+> Nothing functional changed -- only the labels. The integration is still called **Zigbee Home Automation (ZHA)** in the Add Integration list.
+
 ---
 
 ## What You Need
@@ -26,7 +35,7 @@ Any Zigbee 3.0 coordinator works. If you don't have one yet, the **SONOFF ZBDong
 
 # Method A -- ZHA (Recommended)
 
-Use this method if you're using Home Assistant's built-in **Zigbee Home Automation** integration (the default). No extra add-ons required.
+Use this method if you're using Home Assistant's built-in **Zigbee Home Automation** integration (the default). No extra apps (add-ons) required.
 
 ## A1 -- Set Up ZHA
 
@@ -41,8 +50,8 @@ If you already have ZHA running with your coordinator, skip to A2.
 
 The AirCube uses a custom Zigbee cluster (0xFC01) for air quality data and a standard Analog Output cluster (0x000D) for LED brightness. The quirk below tells ZHA to create **sensor entities** for eCO2, eTVOC, and VOC Level, plus a **brightness slider** (0--100%).
 
-1. Install the **File editor** add-on if you don't have it:
-   - **Settings > Add-ons > Add-on Store** -- search **File editor**, install, start it.
+1. Install the **File editor** app (add-on) if you don't have it:
+   - **Settings > Apps > App Store** (**Settings > Add-ons > Add-on Store** on HA 2026.1 and earlier) -- search **File editor**, install, start it.
 
 2. Open **File editor** from the sidebar.
 
@@ -261,7 +270,7 @@ else:
 
 ## A3 -- Pair the AirCube
 
-1. Go to **Settings > Devices & Services > ZHA**.
+1. Go to **Settings > Zigbee** (**Settings > Devices & Services > ZHA** on HA 2026.1 and earlier).
 2. Click **Add Device**.
 3. **Plug in your AirCube** via USB-C. It boots into BLE mode by default -- Zigbee pairing is not automatic.
 4. **Hold the button on the AirCube for 3 seconds.** The LEDs will start flashing blue, and the device reboots into Zigbee mode to begin network steering.
@@ -270,7 +279,7 @@ else:
 
 ## A4 -- Verify Sensors
 
-Go to **Settings > Devices & Services > ZHA** and click on the AirCube device. You should see six entities:
+Go to **Settings > Zigbee > Devices** (**Settings > Devices & Services > ZHA** on HA 2026.1 and earlier) and click on the AirCube device. You should see six entities:
 
 | Entity | What It Does | Unit |
 |--------|-------------|------|
@@ -291,14 +300,14 @@ Use this method if you prefer Zigbee2MQTT or already have it running.
 
 ## B1 -- Install MQTT Broker
 
-1. Go to **Settings > Add-ons > Add-on Store**.
+1. Go to **Settings > Apps > App Store** (**Settings > Add-ons > Add-on Store** on HA 2026.1 and earlier).
 2. Search for **Mosquitto broker**, click **Install**, then **Start**.
 3. Go to **Settings > Devices & Services > Add Integration**.
 4. Search for **MQTT** and add it. Accept the defaults.
 
 ## B2 -- Install Zigbee2MQTT
 
-1. Go to **Settings > Add-ons > Add-on Store**.
+1. Go to **Settings > Apps > App Store** (**Settings > Add-ons > Add-on Store** on HA 2026.1 and earlier).
 2. Click the **three-dot menu** (top-right) > **Repositories**.
 3. Add this URL:
    ```
@@ -314,7 +323,7 @@ Use this method if you prefer Zigbee2MQTT or already have it running.
 
 ## B4 -- Configure and Start Zigbee2MQTT
 
-1. Go to **Settings > Add-ons > Zigbee2MQTT > Configuration** tab.
+1. Go to **Settings > Apps > Zigbee2MQTT > Configuration** tab (**Settings > Add-ons > ...** on HA 2026.1 and earlier).
 2. Set the serial port:
    ```yaml
    serial:
@@ -332,7 +341,7 @@ Both converter files are in the [`z2m/`](z2m/) folder of this repo.
 
 ### Z2M 2.x (Recommended)
 
-1. Open **File editor** (install from Add-on Store if needed).
+1. Open **File editor** (install from the **App Store** / **Add-on Store** if needed).
 2. Navigate to the `zigbee2mqtt` folder (the one containing `configuration.yaml`) and create an `external_converters` subfolder next to it.
 3. Copy [`z2m/aircube.mjs`](z2m/aircube.mjs) into the `external_converters` folder.
 4. Open **`configuration.yaml`** in the `zigbee2mqtt` folder and **enable external JavaScript**:
@@ -354,7 +363,7 @@ Both converter files are in the [`z2m/`](z2m/) folder of this repo.
 
    Z2M 2.0 removed this setting. Everything inside the `external_converters` folder is now loaded automatically, and leaving the old setting in place stops the converter (and sometimes Z2M itself) from starting.
 
-6. **Restart Zigbee2MQTT** from the add-on page.
+6. **Restart Zigbee2MQTT** from its app (add-on) page.
 7. Check the Zigbee2MQTT log. You should see `Loaded external converter 'aircube.mjs'.` If you instead see `External JS (converters/extensions) is disabled`, step 4 did not take effect.
 
 ### Sample `configuration.yaml`
@@ -408,7 +417,7 @@ Two mistakes that are easy to make here:
      - aircube.js
    ```
 
-4. **Restart Zigbee2MQTT** from the add-on page.
+4. **Restart Zigbee2MQTT** from its app (add-on) page.
 
 ## B6 -- Pair the AirCube
 
@@ -524,7 +533,7 @@ The LED follows **canonical VOC Level** (TVOC-derived) on a continuous green-to-
 - **Firmware version:** The device reports its build as the Zigbee Basic cluster **Software build ID** (`sw_build_id`, attribute `0x4000` on cluster `0x0000`, endpoint `10`). In ZHA you can read it under the device’s **Manage Zigbee device** UI. The string comes from ESP-IDF’s app version (`firmware/version.txt` at build time).
 - **Z2M 2.x:** Open the device page in Home Assistant. If it says **"Automatically generated definition"**, Z2M never loaded `aircube.mjs` and is guessing from the raw Zigbee clusters — which is why only the standard ones (temperature, humidity, CO2, illuminance, "Analog output 10") show up. The Z2M log tells you which failure it is; check, in order:
   - The log line **`External JS (converters/extensions) is disabled`** at startup. This is the most common cause. Set `advanced: enable_external_js: true` in `configuration.yaml` (see the [sample config](#sample-configurationyaml)) and restart. While it is disabled Z2M does not read the `external_converters` folder at all, so there is no error message about the converter — only a `Device ... is NOT supported` warning.
-  - `aircube.mjs` sits in an `external_converters` folder **next to** `configuration.yaml` (on the HA add-on that is `/homeassistant/zigbee2mqtt/external_converters/`, **not** `.../data/external_converters/`). If the folder or filename is wrong, Z2M skips it silently.
+  - `aircube.mjs` sits in an `external_converters` folder **next to** `configuration.yaml` (on the HA app/add-on that is `/homeassistant/zigbee2mqtt/external_converters/`, **not** `.../data/external_converters/`). If the folder or filename is wrong, Z2M skips it silently.
   - There is **no** `external_converters:` block left in `configuration.yaml`. That setting was removed in Z2M 2.0 and its presence prevents loading.
   - You're using `aircube.mjs`, not `aircube.js` — Z2M 2.x requires ES module format. If Z2M renames the file to `aircube.mjs.invalid`, the converter has a load error; check the Z2M logs.
   - After fixing any of the above, restart Z2M and then **re-interview** the device (device page > *Reconfigure*) so the custom cluster is registered.
