@@ -29,6 +29,7 @@ import {
   qualityStatusPill,
   tileStatus,
   slotValues,
+  liveMetricValue,
   metricFloor,
   historySegments,
   HISTORY_METRICS,
@@ -369,9 +370,10 @@ export class DetailView {
     if (!this.device) return;
     this.refreshLive();
     this.refreshSync();
-    // Rebuilding the chart on every live reading would fight with the cursor,
-    // so it only redraws when the stored history actually changed.
-    this.refreshHistory(this.device.historyVersion !== this._historyVersion);
+    // Historical ranges redraw only after a sync. The live range updates for
+    // every serial reading, using HistoryChart's in-place update path.
+    const selectedRange = HISTORY_RANGES.find((r) => r.seconds === this.rangeSeconds);
+    this.refreshHistory(selectedRange?.live || this.device.historyVersion !== this._historyVersion);
   }
 
   refreshLive() {
@@ -459,9 +461,20 @@ export class DetailView {
     const now = Date.now() / 1000;
 
     const floor = metricFloor(metric.key);
-    const valid = device
+    const liveRange = HISTORY_RANGES.find((r) => r.seconds === this.rangeSeconds)?.live;
+    const live = liveRange
+      ? device
+        .liveReadingsInRange(this.rangeSeconds)
+        .map((reading) => ({
+          time: reading.timestamp,
+          value: liveMetricValue(metric.key, reading),
+        }))
+        .filter((point) => Number.isFinite(point.value) && point.value > floor)
+      : [];
+    const firstLiveTime = live.length ? live[0].time : Infinity;
+    const validHistory = device
       .slotsInRange(this.rangeSeconds)
-      .filter((s) => slotValues(metric.key, s)[0] > floor);
+      .filter((s) => s.timestamp < firstLiveTime && slotValues(metric.key, s)[0] > floor);
 
     const convert = (v) => (metric.key === "temp" && useF ? cToF(v) : v);
     const unit =
@@ -470,14 +483,24 @@ export class DetailView {
     const format = (v) => `${v.toFixed(metric.decimals)}${unit.startsWith("°") ? unit : ` ${unit}`}`;
     this.formatValue = format;
 
-    const segments = historySegments(valid).map((segment) =>
+    const segments = historySegments(validHistory).map((segment) =>
       segment.map((s) => [s.timestamp, convert(slotValues(metric.key, s)[0])]),
     );
+    if (live.length) {
+      segments.push(live.map((point) => [point.time, convert(point.value)]));
+    }
     this.chart.setData(segments, `--m-${metric.key}`, format, [
       now - this.rangeSeconds,
       now,
     ]);
-    this.chartEmpty.style.display = valid.length || device.isSyncing ? "none" : "";
+    const points = [
+      ...validHistory.map((s) => ({
+        value: convert(slotValues(metric.key, s)[0]),
+        time: s.timestamp,
+      })),
+      ...live.map((point) => ({ value: convert(point.value), time: point.time })),
+    ];
+    this.chartEmpty.style.display = points.length || device.isSyncing ? "none" : "";
 
     // 2-hour sparklines on the tiles (24 slots of 5 minutes).
     const spark = device.sparklineSlots(24);
@@ -492,11 +515,7 @@ export class DetailView {
       spark.map((s) => s.tempAvg).filter((v) => v !== 0).map(convertTemp(useF)),
     );
 
-    if (valid.length) {
-      const points = valid.map((s) => ({
-        value: convert(slotValues(metric.key, s)[0]),
-        time: s.timestamp,
-      }));
+    if (points.length) {
       const peak = points.reduce((a, b) => (b.value > a.value ? b : a));
       const low = points.reduce((a, b) => (b.value < a.value ? b : a));
       const average = points.reduce((sum, p) => sum + p.value, 0) / points.length;

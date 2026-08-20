@@ -9,7 +9,7 @@
 
 import { SerialLink } from "./serial.js";
 import * as proto from "./protocol.js";
-import { seqDistance } from "./quality.js";
+import { LIVE_RANGE_SECONDS, seqDistance } from "./quality.js";
 
 /** A cube counts as online while a reading has arrived within this window. */
 const ONLINE_WINDOW_S = 15;
@@ -47,6 +47,7 @@ export class Device extends EventTarget {
     this.isPro = false;
     this.fwVersion = "";
     this.lastReading = null;
+    this.liveReadings = [];
     this.config = null;
     this.ledPercent = null;
 
@@ -117,6 +118,11 @@ export class Device extends EventTarget {
 
   _onLive(reading) {
     this.lastReading = reading;
+    this.liveReadings.push(reading);
+    const cutoff = reading.timestamp - LIVE_RANGE_SECONDS;
+    while (this.liveReadings.length && this.liveReadings[0].timestamp < cutoff) {
+      this.liveReadings.shift();
+    }
     this.isPro = reading.isPro;
     // Firmware older than 2.0.3 reports no version, so keep whatever the
     // flasher recorded for this cube rather than blanking it.
@@ -262,6 +268,11 @@ export class Device extends EventTarget {
   slotsInRange(seconds) {
     const cutoff = Date.now() / 1000 - seconds;
     return this.slots.filter((s) => s.timestamp >= cutoff);
+  }
+
+  liveReadingsInRange(seconds = LIVE_RANGE_SECONDS) {
+    const cutoff = Date.now() / 1000 - seconds;
+    return this.liveReadings.filter((reading) => reading.timestamp >= cutoff);
   }
 
   /** Most recent n slots; 24 slots of 5 minutes is the tray's 2-hour spark. */

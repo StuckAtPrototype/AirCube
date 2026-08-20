@@ -16,7 +16,13 @@
       import { DetailView } from "../web/js/views/detail.js";
       import { SettingsView } from "../web/js/views/settings.js";
       import { parseLive, parseHistorySlot, parseConfig } from "../web/js/protocol.js";
-      import { airScore, readingQuality, historySegments } from "../web/js/quality.js";
+      import {
+        airScore,
+        readingQuality,
+        historySegments,
+        liveMetricValue,
+        HISTORY_RANGES,
+      } from "../web/js/quality.js";
 
       if (location.search.includes("light")) document.documentElement.dataset.theme = "light";
 
@@ -75,6 +81,29 @@
         d._onLive(parseLive({ ens210: {}, ens16x: {} }));
         if (d.fwVersion !== "2.0.3") throw new Error("blanked by an older frame");
         return `fw=${d.fwVersion}`;
+      });
+
+      check("live readings retain only the rolling hour", () => {
+        const d = new Device({}, 8);
+        const now = Date.now() / 1000;
+        const reading = (timestamp) => ({ timestamp, isPro: false, fwVersion: "" });
+        d._onLive(reading(now - 3601));
+        d._onLive(reading(now - 1800));
+        d._onLive(reading(now));
+        if (d.liveReadings.length !== 2) throw new Error(`retained ${d.liveReadings.length}`);
+        if (d.liveReadingsInRange(900).length !== 1) throw new Error("range filter failed");
+        return `${d.liveReadings.length} retained`;
+      });
+
+      check("live chart metrics map Pro and Base CO2", () => {
+        const pro = { isPro: true, co2: 900, eco2: 500 };
+        const base = { isPro: false, co2: 900, eco2: 500 };
+        if (liveMetricValue("co2", pro) !== 900) throw new Error("Pro did not use true CO2");
+        if (liveMetricValue("co2", base) !== 500) throw new Error("Base did not use eCO2");
+        if (!HISTORY_RANGES[0].live || HISTORY_RANGES[0].seconds !== 3600) {
+          throw new Error("live range is not the one-hour default");
+        }
+        return "Pro=900 Base=500";
       });
 
       check("Base falls back to eCO2 and estimates Pro from co2", () => {
@@ -191,6 +220,11 @@
         detail.refreshHistory(true);
         const stats = [...detail.el.querySelectorAll(".stats-row .value")].map((n) => n.textContent);
         if (stats[0] === "--") throw new Error("no stats computed");
+        if (stats[0] !== "1310 ppm") throw new Error(`live peak missing: ${stats[0]}`);
+        const newestChartTime = Math.max(...detail.chart.data[0]);
+        if (newestChartTime > device.liveReadings[0].timestamp) {
+          throw new Error("overlapping history was kept after live data began");
+        }
         return `peak=${stats[0]} avg=${stats[1]} low=${stats[2]}`;
       });
 
@@ -215,7 +249,19 @@
           await new Promise((r) => setTimeout(r, 120));
           if (!detail.chart.plot) throw new Error("chart still blank after being shown");
 
-          results.push("PASS a chart rendered while hidden builds once shown");
+          const originalPlot = detail.chart.plot;
+          device._onLive(parseLive({
+            model: "pro",
+            ens210: { temperature_c: 24, humidity: 50 },
+            ens16x: { etvoc: 800, eco2: 600, aqi: 3 },
+            scd41: { co2: 1400 },
+          }));
+          detail.refresh();
+          if (detail.chart.plot !== originalPlot) {
+            throw new Error("live update rebuilt the uPlot instance");
+          }
+
+          results.push("PASS a hidden chart builds once and live updates it in place");
         } catch (err) {
           results.push(`FAIL a chart rendered while hidden :: ${err.stack || err}`);
         }

@@ -235,8 +235,19 @@ export class HistoryChart {
       }
     });
     this.data = [xs, ys];
-    this.color = cssVar(this.host, colorVar) || "#8b5cf6";
+    const color = cssVar(this.host, colorVar) || "#8b5cf6";
+    const colorChanged = color !== this.color;
+    this.color = color;
     this.xRange = xRange;
+    if (this.plot && !colorChanged) {
+      // Live mode reaches here every second. Batch the data and rolling
+      // x-window changes so uPlot keeps the same canvas and cursor state.
+      this.plot.batch(() => {
+        this.plot.setData(this.data, true);
+        this.plot.setScale("x", { min: xRange[0], max: xRange[1] });
+      });
+      return;
+    }
     this._render();
   }
 

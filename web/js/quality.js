@@ -129,6 +129,7 @@ export function tileStatus(key, value) {
 
 /** CO2 readings at or below this are treated as missing (iOS HistoryProcessing). */
 export const CO2_VALID_FLOOR = 300;
+export const LIVE_RANGE_SECONDS = 3600;
 const SEGMENT_MAX_SEQ_GAP = 3;
 const SEGMENT_MAX_TIME_GAP_S = 1200;
 
@@ -140,6 +141,7 @@ export const HISTORY_METRICS = [
 ];
 
 export const HISTORY_RANGES = [
+  { key: "Live · 1h", label: "Past hour", seconds: LIVE_RANGE_SECONDS, live: true },
   { key: "24h", label: "Past 24h", seconds: 86400 },
   { key: "3d", label: "Past 3d", seconds: 259200 },
   { key: "7d", label: "Past 7d", seconds: 604800 },
@@ -156,6 +158,20 @@ export function slotValues(metricKey, s) {
       return [s.tempAvg, s.tempMin, s.tempMax];
     default:
       return [s.humAvg, s.humMin, s.humMax];
+  }
+}
+
+/** Instantaneous value for one chart metric from a live serial reading. */
+export function liveMetricValue(metricKey, reading) {
+  switch (metricKey) {
+    case "co2":
+      return reading.isPro ? reading.co2 : reading.eco2;
+    case "voc":
+      return reading.etvoc;
+    case "temp":
+      return reading.temperatureC;
+    default:
+      return reading.humidity;
   }
 }
 
