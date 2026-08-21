@@ -293,6 +293,9 @@ export class DetailView {
       "-",
       { label: "Rename", onSelect: () => this._rename() },
       { label: "Flash firmware", onSelect: () => this.onFlash(device) },
+      ...(device.isPro
+        ? [{ label: "Calibrate CO2 to 425 ppm", onSelect: () => this._runCo2Frc() }]
+        : []),
       "-",
       { label: "Clear history on device", onSelect: () => this._clearHistory() },
       { label: "Disconnect", onSelect: () => this._disconnect() },
@@ -304,6 +307,21 @@ export class DetailView {
     if (name) {
       this.device.rename(name);
       this.refresh();
+    }
+  }
+
+  async _runCo2Frc() {
+    const ok = await confirmDialog(
+      "Calibrate CO2 to 425 ppm",
+      "Leave the cube in outdoor or open-window air for at least 10 minutes before continuing. This sets whatever it is measuring right now to 425 ppm.",
+      "Calibrate",
+    );
+    if (!ok) return;
+    try {
+      const correction = await this.device.runCo2Frc();
+      toast(`CO2 calibrated to 425 ppm (correction ${correction})`);
+    } catch (err) {
+      toast(err.message, "err");
     }
   }
 

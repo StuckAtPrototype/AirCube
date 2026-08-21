@@ -5,6 +5,7 @@
 import { h, openModal, progressBar, toast } from "../ui.js";
 import { loadManifest, fetchImage, readLocalFile, looksLikeEspImage, formatSize } from "../firmware.js";
 import { flashDevice, reconnectAfterFlash, MERGED_IMAGE_ADDRESS, APP_ONLY_ADDRESS } from "../flash.js";
+import { markPendingIfUpgradedFrom204 } from "../frc-nudge.js";
 
 export async function openFlashModal(registry, preselectedDevice) {
   const { backdrop, body, close } = openModal("Flash firmware");
@@ -84,6 +85,7 @@ export async function openFlashModal(registry, preselectedDevice) {
     if (!device) return;
 
     const address = Number(offsetSelect.value);
+    const previousFw = device.fwVersion;
     backdrop.dataset.locked = "true";
     flashBtn.disabled = true;
     closeBtn.disabled = true;
@@ -123,6 +125,7 @@ export async function openFlashModal(registry, preselectedDevice) {
       });
 
       if (flashedVersion) device.fwVersion = flashedVersion;
+      markPendingIfUpgradedFrom204(device, previousFw, flashedVersion);
       write("Reconnecting...");
       const reconnected = await reconnectAfterFlash(device);
       write(

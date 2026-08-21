@@ -6,7 +6,7 @@
  * surfaces today: auto-dim and the sensor readout period.
  */
 
-import { h, clear, pillPicker, toggle, toast } from "../ui.js";
+import { h, clear, pillPicker, toggle, toast, confirmDialog } from "../ui.js";
 import { prefs, applyAppearance } from "../prefs.js";
 
 const APP_VERSION = "1.0.0";
@@ -234,6 +234,18 @@ export class SettingsView {
         }),
         "milliseconds between readings (100-10000)",
       ),
+      row(
+        "Calibrate CO2 to 425 ppm",
+        h("button.btn", {
+          type: "button",
+          text: "Calibrate CO2",
+          disabled: proOnly,
+          onclick: () => this._runCo2Frc(device),
+        }),
+        proOnly
+          ? "Pro only. This cube has no SCD41 CO2 sensor."
+          : "Leave the cube in outdoor or open-window air for at least 10 minutes, then calibrate. Sets the current reading to 425 ppm.",
+      ),
     );
 
     return h(
@@ -242,5 +254,20 @@ export class SettingsView {
       group,
       h("div", { style: { height: "14px" } }),
     );
+  }
+
+  async _runCo2Frc(device) {
+    const ok = await confirmDialog(
+      "Calibrate CO2 to 425 ppm",
+      "Leave the cube in outdoor or open-window air for at least 10 minutes before continuing. This sets whatever it is measuring right now to 425 ppm.",
+      "Calibrate",
+    );
+    if (!ok) return;
+    try {
+      const correction = await device.runCo2Frc();
+      toast(`CO2 calibrated to 425 ppm (correction ${correction})`);
+    } catch (err) {
+      toast(err.message, "err");
+    }
   }
 }

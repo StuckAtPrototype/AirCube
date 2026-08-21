@@ -212,7 +212,7 @@ export function openModal(title, { closable = true } = {}) {
   return { backdrop, body, close };
 }
 
-export function confirmDialog(title, message, confirmLabel = "Confirm") {
+export function confirmDialog(title, message, confirmLabel = "Confirm", cancelLabel = "Cancel") {
   return new Promise((resolve) => {
     const { body, close } = openModal(title);
     body.append(
@@ -221,7 +221,7 @@ export function confirmDialog(title, message, confirmLabel = "Confirm") {
         "div.actions",
         h("button.btn", {
           type: "button",
-          text: "Cancel",
+          text: cancelLabel,
           onclick: () => {
             close();
             resolve(false);

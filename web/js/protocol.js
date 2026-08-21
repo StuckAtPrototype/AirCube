@@ -59,8 +59,29 @@ export function parseLive(data) {
     aqiUba: Math.round(num(ens16x.aqi_uba)),
     isPro: model !== undefined ? model === "pro" : co2 > 0,
     fwVersion: typeof data.fw === "string" ? data.fw : "",
+    frcNeeded: Boolean(data.health && data.health.frc_needed),
     timestamp: Date.now() / 1000,
   };
+}
+
+/** Compare dotted firmware strings. Returns null if either side is unparseable. */
+export function compareFw(a, b) {
+  const parts = (s) => {
+    const m = String(s || "").match(/(\d+)\.(\d+)(?:\.(\d+))?/);
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3] || 0)] : null;
+  };
+  const pa = parts(a);
+  const pb = parts(b);
+  if (!pa || !pb) return null;
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  }
+  return 0;
+}
+
+export function fwLte(version, ceiling) {
+  const cmp = compareFw(version, ceiling);
+  return cmp !== null && cmp <= 0;
 }
 
 /**
@@ -142,6 +163,10 @@ export const cmdGetHistory = (start, count) =>
 
 export const cmdClearHistory = () => '{"cmd":"clear_history"}';
 
+export const cmdScd41Frc = () => '{"cmd":"scd41_frc"}';
+
+export const cmdScd41FrcAck = () => '{"cmd":"scd41_frc_ack"}';
+
 // ------------------------------------------------------------- reply shapes
 
 /** Matchers pair a sent command with the reply line that answers it. */
@@ -150,3 +175,4 @@ export const isHistoryInfoReply = (d) => d.history_info !== undefined;
 export const isHistoryReply = (d) => Array.isArray(d.history);
 export const isLive = (d) => d.ens210 !== undefined;
 export const statusReply = (cmd) => (d) => d.status !== undefined && d.cmd === cmd;
+export const isScd41FrcReply = (d) => d.cmd === "scd41_frc";

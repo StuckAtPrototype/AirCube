@@ -46,6 +46,9 @@ export class Device extends EventTarget {
     this.name = loadNames()[slot] || (slot === 0 ? "AirCube" : `AirCube ${slot + 1}`);
     this.isPro = false;
     this.fwVersion = "";
+    this.frcNeeded = false;
+    this.pendingFrcNudge = false;
+    this._frcNudgeOffered = false;
     this.lastReading = null;
     this.liveReadings = [];
     this.config = null;
@@ -127,6 +130,7 @@ export class Device extends EventTarget {
     // Firmware older than 2.0.3 reports no version, so keep whatever the
     // flasher recorded for this cube rather than blanking it.
     if (reading.fwVersion) this.fwVersion = reading.fwVersion;
+    this.frcNeeded = Boolean(reading.frcNeeded);
     this._changed();
   }
 
@@ -175,6 +179,38 @@ export class Device extends EventTarget {
     await this.link.sendNoReply(proto.cmdSetReadoutPeriod(ms));
     if (this.config) this.config.readoutPeriod = Math.round(ms);
     this._changed();
+  }
+
+  /**
+   * Forced recalibration of the Pro SCD41 to 425 ppm. The cube must already
+   * have been sitting in that air for several minutes; this only issues the
+   * command. Returns the signed correction word from the sensor.
+   */
+  async runCo2Frc() {
+    if (!this.isPro) {
+      throw new Error("CO2 calibration is only available on AirCube Pro");
+    }
+    if (!this.isConnected) {
+      throw new Error("Cube is not connected");
+    }
+    const reply = await this.link.send(proto.cmdScd41Frc(), proto.isScd41FrcReply, {
+      timeoutMs: 15000,
+      retries: 0,
+    });
+    if (reply.status !== "ok") {
+      throw new Error(reply.msg || "CO2 calibration failed");
+    }
+    this.frcNeeded = false;
+    this.pendingFrcNudge = false;
+    return Math.round(Number(reply.correction) || 0);
+  }
+
+  /** Clear the one-time post-upgrade calibration prompt without running FRC. */
+  async dismissFrcNudge() {
+    this.frcNeeded = false;
+    this.pendingFrcNudge = false;
+    if (!this.isConnected) return;
+    await this.link.send(proto.cmdScd41FrcAck(), proto.statusReply("scd41_frc_ack"));
   }
 
   rename(name) {

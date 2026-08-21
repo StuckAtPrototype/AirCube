@@ -13,6 +13,7 @@ import { HomeView } from "./views/home.js";
 import { DetailView } from "./views/detail.js";
 import { SettingsView } from "./views/settings.js";
 import { openFlashModal } from "./views/flash-modal.js";
+import { maybeOfferUpgradeCalibration } from "./frc-nudge.js";
 
 const STALE_TICK_MS = 2000;
 
@@ -116,10 +117,16 @@ class App {
       (location.hash === "" || location.hash === "#/" || location.hash === "#")
     ) {
       location.replace(`#/device/${this.registry.devices[0].id}`);
+      for (const device of this.registry.devices) {
+        maybeOfferUpgradeCalibration(device);
+      }
       return;
     }
 
     this.render();
+    for (const device of this.registry.devices) {
+      maybeOfferUpgradeCalibration(device);
+    }
   }
 
   navigate(hash) {
