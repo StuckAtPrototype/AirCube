@@ -59,6 +59,8 @@ typedef struct {
     uint32_t stuck_events;          // times a stuck fault has latched
     uint32_t recovery_attempts;     // reinit attempts since boot
     uint32_t rejected_samples;      // reads dropped as implausible
+    uint32_t co2_failures;          // frames in a row with good T/RH but no CO2
+    int32_t  self_test_result;      // last self-test status word, -1 if never run
     int64_t  last_good_age_ms;      // age of last accepted T/RH, -1 if never
     int64_t  last_co2_age_ms;       // age of last accepted CO2, -1 if never
 } scd41_health_t;

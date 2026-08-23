@@ -28,5 +28,8 @@ scripts/build/
 # Local release staging
 releases/
 
+# Local hardware triage tooling and its captures; see debug-tools/README.md
+debug-tools/
+
 # Firmware binaries staged into the web flasher by scripts/build_web_manifest.py
 web/firmware/*.bin

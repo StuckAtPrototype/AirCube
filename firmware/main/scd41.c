@@ -78,6 +78,19 @@ static const char *TAG = "scd41";
 #define SCD41_RECOVERY_MAX_ATTEMPTS 10
 #define SCD41_RECOVERY_SPACING_US   (60ULL * 1000000ULL)
 
+// Consecutive frames carrying good T/RH but a rejected CO2 word before the CO2
+// channel is treated as faulty. At the ~30 s low-power cadence this is about
+// 2.5 minutes, well clear of the sensor's own start-up settling.
+#define SCD41_CO2_FAULT_THRESHOLD 5
+
+// A sensor that has stopped measuring still ACKs and still answers data_ready
+// with "not ready", so no failure counter ever moves and none of the recovery
+// triggers above can fire. Three missed frames at the ~30 s low-power cadence
+// separates a sensor that is idle from one that is merely slow. The warm resume
+// path assumes the sensor kept measuring across an MCU reset; when that
+// assumption is wrong this is what notices.
+#define SCD41_NO_FRAME_TIMEOUT_US (90ULL * 1000000ULL)
+
 // Retry pacing after a failure: doubles per consecutive failure up to 32 s, so
 // a dead sensor is not hammered once per second forever.
 #define SCD41_RETRY_BASE_US    (1ULL * 1000000ULL)
@@ -133,6 +146,16 @@ static uint32_t scd41_consecutive_failures = 0;
 static uint32_t scd41_recovery_attempts = 0;
 static uint32_t scd41_rejected_samples = 0;
 static int64_t  scd41_retry_after_us = 0;
+// CO2-only fault bookkeeping. A frame whose T/RH decode fine but whose CO2 word
+// is rejected is still a successful read, so it clears
+// scd41_consecutive_failures and would otherwise never reach the recovery path.
+// Counted separately so a sensor that has lost only its CO2 channel is noticed.
+static uint32_t scd41_co2_failures = 0;
+static int32_t  scd41_co2_self_test_result = -1;
+static bool     scd41_co2_self_test_done = false;
+// When a frame was last read off the sensor, as opposed to when its contents
+// were last accepted. Zero until the first poll seeds it.
+static int64_t  scd41_last_frame_us = 0;
 // Kept separate from scd41_retry_after_us so that a successful read (which a
 // stuck sensor still produces) does not reset the recovery pacing.
 static int64_t  scd41_recovery_after_us = 0;
@@ -528,6 +551,8 @@ void scd41_get_health(scd41_health_t *out)
     out->stuck_events         = scd41_stuck_events;
     out->recovery_attempts    = scd41_recovery_attempts;
     out->rejected_samples     = scd41_rejected_samples;
+    out->co2_failures         = scd41_co2_failures;
+    out->self_test_result     = scd41_co2_self_test_result;
     out->last_good_age_ms     = scd41_ever_valid
                                 ? (now - scd41_last_good_us) / 1000 : -1;
     out->last_co2_age_ms      = scd41_ever_co2_valid
@@ -577,6 +602,8 @@ void scd41_init(bool resume_periodic)
     scd41_recovery_after_us = 0;
     scd41_stuck_events = 0;
     scd41_frame_valid = false;
+    scd41_co2_failures = 0;
+    scd41_last_frame_us = 0;
 
     // Quietly check whether anything is on the bus at the SCD41 address first.
     // On Base hardware the sensor is absent by design, so treat a no-ACK as a
@@ -691,6 +718,8 @@ static esp_err_t scd41_recover(const char *reason)
     scd41_retry_after_us = 0;
     scd41_have_prev_words = false;
     scd41_identical_streak = 0;
+    scd41_co2_failures = 0;
+    scd41_last_frame_us = esp_timer_get_time();
 
     ESP_LOGW(TAG, "Recovery complete; sensor will be re-assessed");
     return ESP_OK;
@@ -724,6 +753,7 @@ static esp_err_t scd41_self_test_locked(uint16_t *result)
     esp_err_t self_test_ret = scd41_read_words(SCD41_CMD_PERFORM_SELF_TEST, result, 1,
                                                SCD41_EXEC_SELF_TEST_US);
     if (self_test_ret == ESP_OK) {
+        scd41_co2_self_test_result = (int32_t)*result;
         ESP_LOGW(TAG, "Self test result 0x%04X (%s)", *result,
                  (*result == 0) ? "no malfunction" : "MALFUNCTION");
     } else {
@@ -816,6 +846,7 @@ static esp_err_t scd41_forced_recalibration_locked(int16_t *correction_out)
     // as "already on baseline" while the next ~30 s low-power frame is taken.
     scd41_ever_co2_valid = false;
     scd41_co2 = 0;
+    scd41_co2_failures = 0;
 
     scd41_ensure_asc_disabled();
     scd41_apply_temperature_offset(SCD41_TEMPERATURE_OFFSET_C);
@@ -854,6 +885,10 @@ static bool scd41_read_and_store(void)
         return false;
     }
 
+    // A frame arrived, whatever it turns out to contain. This is what the
+    // no-frame watchdog in scd41_poll_locked() measures against.
+    scd41_last_frame_us = esp_timer_get_time();
+
     // A frame that arrives intact but decodes to nonsense still counts as a
     // failed read, otherwise a sensor returning plausible-CRC garbage would
     // never trip the recovery path.
@@ -865,6 +900,15 @@ static bool scd41_read_and_store(void)
         return false;
     }
 
+    // A CO2 word rejected inside an otherwise good frame is the signature of a
+    // sensor that has lost only its CO2 channel. scd41_note_success() below
+    // clears the shared failure counter, so this one is tracked on its own.
+    if (stored_co2) {
+        scd41_co2_failures = 0;
+    } else if (scd41_co2_failures < UINT32_MAX) {
+        scd41_co2_failures++;
+    }
+
     scd41_note_success();
     return true;
 }
@@ -873,11 +917,47 @@ static bool scd41_poll_locked(void)
 {
     int64_t now = esp_timer_get_time();
 
-    if ((scd41_consecutive_failures >= SCD41_RECOVERY_THRESHOLD || scd41_stuck_latched) &&
+    // Seed the watchdog on the first poll so the window is measured from when
+    // frames actually started being expected, not from an uninitialised zero.
+    if (scd41_last_frame_us == 0) {
+        scd41_last_frame_us = now;
+    }
+
+    bool co2_fault = (scd41_co2_failures >= SCD41_CO2_FAULT_THRESHOLD);
+    bool no_frames = (now - scd41_last_frame_us) > (int64_t)SCD41_NO_FRAME_TIMEOUT_US;
+
+    if ((scd41_consecutive_failures >= SCD41_RECOVERY_THRESHOLD || scd41_stuck_latched ||
+         co2_fault || no_frames) &&
         scd41_recovery_attempts < SCD41_RECOVERY_MAX_ATTEMPTS &&
         now >= scd41_recovery_after_us) {
-        scd41_recover(scd41_stuck_latched ? "stuck temperature/humidity"
-                                          : "repeated read failures");
+        // A CO2 channel that has gone silent while T/RH keep arriving is either an
+        // internal malfunction or a supply that cannot hold up under the sensor's
+        // measurement peaks, and the built-in self test is the only thing on the
+        // device that separates the two. Run it once, before the first reinit, so
+        // the diagnosis is not masked by a recovery that appears to succeed.
+        // Only meaningful when frames are arriving but CO2 is missing from them;
+        // an idle sensor has no CO2 reading to be suspicious about.
+        if (co2_fault && !no_frames && !scd41_co2_self_test_done) {
+            scd41_co2_self_test_done = true;
+            uint16_t status = 0;
+            if (scd41_self_test_locked(&status) == ESP_OK && status != 0) {
+                ESP_LOGE(TAG, "CO2 channel silent and self test returned 0x%04X: "
+                              "sensor malfunction or insufficient supply", status);
+            }
+        }
+
+        const char *reason;
+        if (scd41_stuck_latched) {
+            reason = "stuck temperature/humidity";
+        } else if (scd41_consecutive_failures >= SCD41_RECOVERY_THRESHOLD) {
+            reason = "repeated read failures";
+        } else if (no_frames) {
+            reason = "sensor stopped producing frames";
+        } else {
+            reason = "co2 measurement failure";
+        }
+
+        scd41_recover(reason);
         scd41_recovery_after_us = esp_timer_get_time() + (int64_t)SCD41_RECOVERY_SPACING_US;
         return false;
     }

@@ -282,7 +282,7 @@ static int format_health_json(char *buf, size_t size)
         "\"probe\":{\"scd41\":%d,\"vcnl4040\":%d,\"ens210\":%d},"
         "\"scd41\":{\"present\":%s,\"valid\":%s,\"co2_valid\":%s,\"stuck\":%s,"
         "\"fails\":%lu,\"identical\":%lu,\"stuck_events\":%lu,"
-        "\"recoveries\":%lu,\"rejected\":%lu,"
+        "\"recoveries\":%lu,\"rejected\":%lu,\"co2_fails\":%lu,\"self_test\":%ld,"
         "\"age_ms\":%lld,\"co2_age_ms\":%lld},"
         "\"ens16x\":{\"etvoc_valid\":%s},\"frc_needed\":%s}",
         aircube_model_name(), aircube_model_source_name(),
@@ -299,6 +299,8 @@ static int format_health_json(char *buf, size_t size)
         (unsigned long)scd.stuck_events,
         (unsigned long)scd.recovery_attempts,
         (unsigned long)scd.rejected_samples,
+        (unsigned long)scd.co2_failures,
+        (long)scd.self_test_result,
         (long long)scd.last_good_age_ms,
         (long long)scd.last_co2_age_ms,
         (ens16x_get_etvoc() >= 0) ? "true" : "false",
