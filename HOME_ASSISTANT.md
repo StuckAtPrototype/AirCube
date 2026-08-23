@@ -4,6 +4,8 @@ This guide walks you through adding your AirCube air quality monitor to Home Ass
 
 The AirCube works with both **ZHA** (built-in) and **Zigbee2MQTT**. Pick whichever you already use. If you're starting fresh, ZHA is simpler.
 
+**Prefer to follow along?** [Watch the AirCube ZHA integration walkthrough on YouTube](https://www.youtube.com/watch?v=rpkR3O64rY8).
+
 > **A note on names.** Home Assistant renamed a couple of things in 2026.2, so the menus below are listed with both names -- use whichever your version shows:
 >
 > | HA 2026.2 and newer | HA 2026.1 and earlier |
@@ -291,6 +293,8 @@ Go to **Settings > Zigbee > Devices** (**Settings > Devices & Services > ZHA** o
 | Brightness | LED brightness (slider) | 0--100 |
 
 > Temperature and humidity are detected automatically by ZHA. eCO2, eTVOC, and VOC Level come from the custom quirk. The brightness slider uses the standard Analog Output cluster.
+>
+> **AirCube Pro:** The current ZHA quirk exposes these same six entities. The Pro's dedicated true CO2 and illuminance sensors are not yet exposed by ZHA; use Zigbee2MQTT 2.x if you need those two entities in Home Assistant.
 
 ---
 
@@ -439,7 +443,7 @@ Go to **Settings > Devices & Services > MQTT** and click on the AirCube. You sho
 | VOC level | TVOC-derived VOC Level (0--500) | -- |
 | Brightness | LED brightness (slider) | 0--100 |
 
-On the **Pro**, two more entities appear from the dedicated sensors: **CO2** (true CO2 from the SCD41, in ppm) and **Illuminance** (ambient light from the VCNL4040, in lx). These are absent on the Base, which does not have those sensors.
+On the **Pro**, two more entities appear from the dedicated sensors when using **Zigbee2MQTT 2.x with `aircube.mjs`**: **CO2** (true CO2 from the SCD41, in ppm) and **Illuminance** (ambient light from the VCNL4040, in lx). These are absent on the Base. The legacy Zigbee2MQTT 1.x `aircube.js` converter exposes only the six core entities.
 
 > If the device card says *"Automatically generated definition"*, the converter did **not** load. See the troubleshooting section below.
 

@@ -1,6 +1,6 @@
 # AirCube
 
-**See your air** AirCube is a desktop air quality monitor with built-in **Home Assistant** support over **Zigbee** or **Bluetooth (BLE)**. It tracks temperature, humidity, eCO2, TVOC, and VOC Level -- showing air quality as a single, glanceable LED color and reporting every reading to your smart home.
+**See your air.** AirCube is a desktop air quality monitor with built-in **Home Assistant** support over **Zigbee** or **Bluetooth (BLE)**. Every model tracks temperature, humidity, eCO2, eTVOC, and VOC Level; AirCube Pro also measures true CO2 and ambient light. A glanceable LED shows the current air quality.
 
 Works standalone out of the box. Pairs with Home Assistant in minutes. Other platforms are supported through **[community-contributed extensions](#community-extensions)**.
 
@@ -10,7 +10,7 @@ Works standalone out of the box. Pairs with Home Assistant in minutes. Other pla
 
 [AirCube](https://stuckatprototype.com/products/aircube) -- Assembled AirCube
 
-[AirCube Populated PCB](https://stuckatprototype.com/products/aircube-populated-pcb) -- AirCube Populated PCB AirCube
+[AirCube Populated PCB](https://stuckatprototype.com/products/aircube-populated-pcb) -- AirCube Populated PCB
 
 ---
 
@@ -39,9 +39,20 @@ That's it. AirCube works out of the box with no setup, no accounts, and no Wi-Fi
 
 ---
 
-AirCube ships in two models. **Base** measures VOC Level, eCO2, eTVOC, temperature, and humidity.
-**Pro** adds a true CO2 sensor (Sensirion SCD41, direct NDIR measurement -- more accurate than the
-eCO2 estimate) and an ambient light sensor (VCNL4040) that automatically dims the LED at night.
+## Base vs. Pro
+
+Both models use the ScioSense ENS161 for VOC Level, eCO2, and eTVOC. Choose **Pro** when you also want a direct CO2 measurement and automatic LED dimming based on room light.
+
+| Feature | Base | Pro |
+|---------|------|-----|
+| VOC Level, eCO2, and eTVOC | ENS161 | ENS161 |
+| Temperature and humidity | ENS210 | Sensirion SCD41 |
+| True CO2 | -- | Sensirion SCD41 (NDIR) |
+| Ambient light | -- | VCNL4040 |
+| Automatic LED dimming | -- | Yes |
+| LED air-quality source | VOC Level | Whichever is worse: VOC Level or true CO2 |
+
+> **eCO2 vs. true CO2:** eCO2 is an estimate derived from detected VOCs. The Pro's SCD41 measures CO2 directly using NDIR, while the ENS161 still detects odors and fumes that a pure CO2 sensor can miss.
 
 ## What AirCube Measures
 
@@ -54,10 +65,11 @@ eCO2 estimate) and an ambient light sensor (VCNL4040) that automatically dims th
 | **eTVOC** (equivalent Total VOC) | 0 -- 65,000 ppb | Total volatile organic compound concentration |
 | **Temperature** | | Room temperature in Celsius |
 | **Humidity** | 0 -- 100 % | Relative humidity percentage |
+| **Illuminance** (Pro only) | | Ambient light in lux; also used to dim the LED automatically |
 
 ### Understanding the readings
 
-AirCube uses a **ScioSense ENS161** gas sensor and an **ENS210** temperature/humidity sensor. The ENS210 compensates the ENS161; the firmware reads finished values over I2C.
+AirCube Base uses a **ScioSense ENS161** gas sensor and an **ENS210** temperature/humidity sensor. AirCube Pro uses the ENS161 alongside an **SCD41** for true CO2, temperature, and humidity, plus a **VCNL4040** ambient light sensor.
 
 **eCO2 (ppm)** -- Estimated CO2 derived from detected VOCs, not a direct CO2 measurement. Useful for judging ventilation; also picks up odors and fumes a pure CO2 sensor would miss.
 
@@ -95,7 +107,9 @@ The ENS161 needs about **3 minutes** of warm-up in standard mode before readings
 
 ## Home Assistant Integration
 
-AirCube was designed for Home Assistant. It connects over **Zigbee** -- no USB cable to your server, no cloud, no Wi-Fi credentials to configure. Plug it in, hold the button for 3 seconds to start pairing, and six entities show up: temperature, humidity, eCO2, tVOC, VOC Level, and brightness.
+AirCube was designed for Home Assistant. It connects over **Zigbee** -- no USB cable to your server, no cloud, no Wi-Fi credentials to configure. Plug it in, hold the button for 3 seconds to start pairing, and six core entities show up: temperature, humidity, eCO2, eTVOC, VOC Level, and brightness.
+
+AirCube Pro's true CO2 and illuminance entities are also available with the **Zigbee2MQTT 2.x** converter. The current ZHA quirk exposes the six core entities on both models.
 
 Once connected you can:
 - **Track air quality over time** with built-in history graphs
@@ -105,6 +119,8 @@ Once connected you can:
 **You'll need:** a Zigbee coordinator dongle (we recommend the [SONOFF ZBDongle-E](https://sonoff.tech/product/gateway-and-sensors/sonoff-zigbee-3-0-usb-dongle-plus-e/), ~$13) plugged into your Home Assistant machine.
 
 **Works with** ZHA (built-in) and Zigbee2MQTT.
+
+**Video walkthrough:** [Set up AirCube with ZHA in Home Assistant](https://www.youtube.com/watch?v=rpkR3O64rY8)
 
 **Full setup guide:** **[Connecting AirCube to Home Assistant](HOME_ASSISTANT.md)**
 
@@ -163,11 +179,11 @@ Select your serial port, click **Connect**, and you'll see live data.
 
 ## Firmware Updates
 
-New firmware releases add features and fix bugs. Updating takes a couple of minutes with just a browser -- no tools to install.
+The current firmware is **v2.0.5**. On Pro units it disables SCD41 automatic self-calibration, adds a 425 ppm fresh-air calibration, and prompts once after an upgrade from 2.0.4 or older. See the [v2.0.5 release notes](releases/RELEASE_NOTES_v2.0.5.md).
 
 **[Flash it now with AirCube Web](https://stuckatprototype.github.io/AirCube/)** or read the **[Firmware Update Guide](FIRMWARE_UPDATE.md)** for step-by-step instructions.
 
-Latest release: [GitHub Releases](https://github.com/StuckAtPrototype/AirCube/releases)
+All releases: [GitHub Releases](https://github.com/StuckAtPrototype/AirCube/releases)
 
 ---
 
@@ -183,7 +199,7 @@ Printable enclosure files live in [`mechanical/base/`](mechanical/base) and [`me
 
 ## LED Reference
 
-### Firmware 1.5.0 and above (current)
+### Firmware 1.5.0 and above
 
 The LED is a continuous green-to-red gradient driven by **canonical VOC Level** (TVOC-derived). The hue moves linearly with VOC Level: pure green up to VOC Level 10, then fading green → lime → yellow → orange → red, reaching full red at VOC Level 200. eCO2 does **not** affect the LED.
 

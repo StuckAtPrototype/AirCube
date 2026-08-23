@@ -14,8 +14,9 @@
 // pulling in the driver.
 #define SCD41_I2C_ADDRESS 0x62
 
-// Probe for the sensor. On a cold boot, apply the static temperature offset and
-// start low-power periodic measurement mode (~30-second CO2/RH/T updates).
+// Probe for the sensor. On a cold boot, apply the static temperature offset,
+// disable ASC (persisted once so warm MCU resumes keep it off), and start
+// low-power periodic measurement mode (~30-second CO2/RH/T updates).
 // When resume_periodic is true, the sensor retained power across an MCU reset
 // and its running measurement cycle is left untouched.
 // Safe to call on hardware that does not have the SCD41 fitted (Base model):
@@ -84,5 +85,23 @@ esp_err_t scd41_self_test(uint16_t *result);
 // restart low-power periodic mode. Clears failure counters but retains a stuck
 // fault until genuinely moving readings arrive. Never performs a factory reset.
 esp_err_t scd41_reinit(void);
+
+// Outdoor fresh-air reference used by every FRC. ~2025-2026 global background
+// CO2; Sensirion does not hardcode this — we send it as the FRC target.
+#define SCD41_FRC_TARGET_PPM 425
+
+// Forced recalibration to SCD41_FRC_TARGET_PPM. The sensor must already have
+// been measuring in that air for several minutes; this command does not wait.
+// On success *correction_out is the signed FRC correction in ppm (the sensor's
+// raw word minus its 0x8000 offset). 0xFFFF from the sensor is treated as
+// failure. Blocks ~1 s once it has the SCD41 lock (stop + FRC + ASC check +
+// restart), but can wait on the sensor task for considerably longer.
+esp_err_t scd41_forced_recalibration(int16_t *correction_out);
+
+// One-time host prompt after an upgrade onto the ASC-off firmware (from
+// <= 2.0.4, or any unit that has never stored this generation). True until a
+// successful FRC or scd41_clear_frc_needed().
+bool scd41_frc_needed(void);
+void scd41_clear_frc_needed(void);
 
 #endif // AIRCUBE_SCD41_H

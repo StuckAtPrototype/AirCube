@@ -14,6 +14,7 @@ import { LIVE_RANGE_SECONDS, seqDistance } from "./quality.js";
 /** A cube counts as online while a reading has arrived within this window. */
 const ONLINE_WINDOW_S = 15;
 const NAMES_KEY = "aircube.names";
+const FRC_DONE_KEY = "aircube.frcDone";
 
 let nextId = 1;
 
@@ -30,6 +31,38 @@ function saveName(slot, name) {
   names[slot] = name;
   try {
     localStorage.setItem(NAMES_KEY, JSON.stringify(names));
+  } catch {
+    /* private mode */
+  }
+}
+
+function loadFrcDone() {
+  try {
+    return JSON.parse(localStorage.getItem(FRC_DONE_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Whether CO2 calibration has already been settled for the cube in this slot,
+ * either by running it or by the user waving the prompt away.
+ *
+ * The cube cannot remember this for itself across an update: release images
+ * are flashed at 0x0 and span the NVS partition at 0x9000, so every flash
+ * erases the firmware's one-time prompt flag. The SCD41 holds its calibration
+ * in the sensor, which a reflash does not touch, so this record is what stops
+ * an already-calibrated cube asking again after each update.
+ */
+export function frcSettled(slot) {
+  return Boolean(loadFrcDone()[slot]);
+}
+
+function markFrcSettled(slot) {
+  const done = loadFrcDone();
+  done[slot] = true;
+  try {
+    localStorage.setItem(FRC_DONE_KEY, JSON.stringify(done));
   } catch {
     /* private mode */
   }
@@ -202,13 +235,18 @@ export class Device extends EventTarget {
     }
     this.frcNeeded = false;
     this.pendingFrcNudge = false;
+    markFrcSettled(this.slot);
     return Math.round(Number(reply.correction) || 0);
   }
 
-  /** Clear the one-time post-upgrade calibration prompt without running FRC. */
+  /**
+   * Clear the one-time post-upgrade calibration prompt without running FRC.
+   * Remembered for this cube, so a later update does not ask again.
+   */
   async dismissFrcNudge() {
     this.frcNeeded = false;
     this.pendingFrcNudge = false;
+    markFrcSettled(this.slot);
     if (!this.isConnected) return;
     await this.link.send(proto.cmdScd41FrcAck(), proto.statusReply("scd41_frc_ack"));
   }

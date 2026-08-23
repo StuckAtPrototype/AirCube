@@ -217,7 +217,7 @@ void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float h
         "\"ens16x\":{\"status\":\"%s\",\"etvoc\":%d,\"eco2\":%d,\"aqi\":%d,\"aqi_s\":%d,\"aqi_uba\":%d},"
         "\"scd41\":{\"co2\":%d},\"vcnl4040\":{\"lux\":%.1f},"
         "\"health\":{\"ok\":%s,\"temp_valid\":%s,\"hum_valid\":%s,\"co2_valid\":%s,"
-        "\"etvoc_valid\":%s,\"sensor_missing\":%s},"
+        "\"etvoc_valid\":%s,\"sensor_missing\":%s,\"frc_needed\":%s},"
         "\"timestamp\":%lu}\n",
         model, esp_app_get_description()->version,
         ens210_status, temperature_c, temperature_f, humidity,
@@ -229,6 +229,7 @@ void serial_send_sensor_data(uint8_t ens210_status, float temperature_c, float h
         co2_valid ? "true" : "false",
         (etvoc >= 0) ? "true" : "false",
         aircube_model_sensor_missing() ? "true" : "false",
+        scd41_frc_needed() ? "true" : "false",
         (unsigned long)timestamp);
     
     if (len > 0 && len < sizeof(json_buffer)) {
@@ -283,7 +284,7 @@ static int format_health_json(char *buf, size_t size)
         "\"fails\":%lu,\"identical\":%lu,\"stuck_events\":%lu,"
         "\"recoveries\":%lu,\"rejected\":%lu,"
         "\"age_ms\":%lld,\"co2_age_ms\":%lld},"
-        "\"ens16x\":{\"etvoc_valid\":%s}}",
+        "\"ens16x\":{\"etvoc_valid\":%s},\"frc_needed\":%s}",
         aircube_model_name(), aircube_model_source_name(),
         aircube_model_sensor_missing() ? "true" : "false",
         temp_valid ? "true" : "false",
@@ -300,7 +301,8 @@ static int format_health_json(char *buf, size_t size)
         (unsigned long)scd.rejected_samples,
         (long long)scd.last_good_age_ms,
         (long long)scd.last_co2_age_ms,
-        (ens16x_get_etvoc() >= 0) ? "true" : "false");
+        (ens16x_get_etvoc() >= 0) ? "true" : "false",
+        scd41_frc_needed() ? "true" : "false");
 }
 
 static void send_model_response(const char *cmd)
@@ -671,6 +673,35 @@ static bool parse_command(const char* buffer, size_t len)
             send_response("ok", "scd41_reinit", 0);
         } else {
             send_error(esp_err_to_name(err));
+        }
+        return true;
+    }
+
+    // Dismiss the one-time post-upgrade FRC prompt without calibrating.
+    if (strcmp(cmd_name, "scd41_frc_ack") == 0) {
+        scd41_clear_frc_needed();
+        send_response("ok", "scd41_frc_ack", 0);
+        return true;
+    }
+
+    // Forced recalibration to outdoor background CO2. The host is responsible
+    // for making sure the cube has been sitting in fresh air long enough first.
+    if (strcmp(cmd_name, "scd41_frc") == 0) {
+        int16_t correction = 0;
+        esp_err_t err = scd41_forced_recalibration(&correction);
+        char reply[128];
+        int rlen;
+        if (err == ESP_OK) {
+            rlen = snprintf(reply, sizeof(reply),
+                   "{\"status\":\"ok\",\"cmd\":\"scd41_frc\",\"target\":%d,"
+                   "\"correction\":%d}\n", SCD41_FRC_TARGET_PPM, (int)correction);
+        } else {
+            rlen = snprintf(reply, sizeof(reply),
+                   "{\"status\":\"error\",\"cmd\":\"scd41_frc\",\"msg\":\"%s\"}\n",
+                   esp_err_to_name(err));
+        }
+        if (rlen > 0 && rlen < (int)sizeof(reply)) {
+            serial_write(reply, (size_t)rlen);
         }
         return true;
     }

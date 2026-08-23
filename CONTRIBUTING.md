@@ -210,7 +210,7 @@ The AirCube communicates over USB-Serial-JTAG at **115200 baud**. All messages a
   "ens16x": {"status": "OK", "etvoc": 42, "eco2": 415, "aqi": 3, "aqi_s": 0, "aqi_uba": 1},
   "scd41": {"co2": 512},
   "vcnl4040": {"lux": 84.2},
-  "health": {"ok": true, "temp_valid": true, "hum_valid": true, "co2_valid": true, "etvoc_valid": true, "sensor_missing": false},
+  "health": {"ok": true, "temp_valid": true, "hum_valid": true, "co2_valid": true, "etvoc_valid": true, "sensor_missing": false, "frc_needed": false},
   "timestamp": 12345
 }
 ```
@@ -221,7 +221,9 @@ The AirCube communicates over USB-Serial-JTAG at **115200 baud**. All messages a
 returns `0` now; the field is kept only for serial JSON compatibility. `scd41.co2` and
 `vcnl4040.lux` are `0` on Base hardware (no SCD41/VCNL4040 fitted) and real readings on Pro.
 `health` carries per-channel validity so a consumer can tell a fresh reading from a held one;
-`get_sensor_health` returns the same picture in more detail. `timestamp` is milliseconds since boot.
+`get_sensor_health` returns the same picture in more detail. `health.frc_needed` is `true` on Pro
+after the first boot of the ASC-off firmware (an upgrade from <= 2.0.4) until the host runs
+`scd41_frc` or `scd41_frc_ack`. `timestamp` is milliseconds since boot.
 
 ### Commands (send to device)
 
@@ -236,6 +238,12 @@ All commands are JSON with a `"cmd"` field. Send a complete JSON object followed
 | `get_history_info` | `{"cmd":"get_history_info"}` | `{"history_info":{"entries":288,"capacity":2016,"slot_bytes":32,"window_us":300000000}}` |
 | `get_history` | `{"cmd":"get_history","start":0,"count":48}` | `{"history":[...],"start":0,"count":48}` |
 | `clear_history` | `{"cmd":"clear_history"}` | `{"status":"ok","cmd":"clear_history","value":0.00}` |
+| `scd41_frc` | `{"cmd":"scd41_frc"}` | `{"status":"ok","cmd":"scd41_frc","target":425,"correction":<int>}` (Pro only; sets current air to 425 ppm) |
+| `scd41_frc_ack` | `{"cmd":"scd41_frc_ack"}` | `{"status":"ok","cmd":"scd41_frc_ack","value":0.00}` (clears `health.frc_needed` without calibrating) |
+| `scd41_selftest` | `{"cmd":"scd41_selftest"}` | `{"status":"ok","cmd":"scd41_selftest","result":"0x0000","malfunction":false}` (~10 s, Pro only) |
+| `scd41_reinit` | `{"cmd":"scd41_reinit"}` | `{"status":"ok","cmd":"scd41_reinit","value":0.00}` (Pro only) |
+
+`scd41_frc` is Forced Recalibration: the SCD41 treats the air it is currently measuring as 425 ppm (current outdoor background). Sensirion's command minimum is 3 minutes in the same measurement mode; in AirCube's ~30 s low-power periodic mode wait at least 10 minutes of outdoor or open-window air so several fresh frames have landed. A `correction` of the sensor's signed FRC word is returned on success; firmware replies with `{"status":"error",...}` if the SCD41 is missing or the sensor reports failure (`0xFFFF`). ASC is always disabled on Pro hardware and is not a user setting. The first boot after an upgrade from <= 2.0.4 sets `health.frc_needed` so the web app can ask for that calibration once; `scd41_frc` and `scd41_frc_ack` both clear it.
 
 **Shortcut:** Typing just `h` in the serial monitor dumps the entire history as CSV.
 

@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "nvs.h"
 #include <string.h>
 
 static const char *TAG = "scd41";
@@ -25,6 +26,10 @@ static const char *TAG = "scd41";
 #define SCD41_CMD_GET_DATA_READY          0xE4B8  // ~1 ms exec
 #define SCD41_CMD_REINIT                  0x3646  // ~30 ms exec
 #define SCD41_CMD_PERFORM_SELF_TEST       0x3639  // ~10000 ms exec
+#define SCD41_CMD_PERFORM_FRC             0x362F  // ~400 ms exec
+#define SCD41_CMD_GET_ASC_ENABLED         0x2313  // ~1 ms exec
+#define SCD41_CMD_SET_ASC_ENABLED         0x2416  // ~1 ms exec
+#define SCD41_CMD_PERSIST_SETTINGS        0x3615  // ~800 ms exec
 
 // CRC-8: polynomial 0x31, init 0xFF, no reflection, final XOR 0x00
 #define SCD41_CRC8_POLYNOMIAL 0x31
@@ -35,6 +40,11 @@ static const char *TAG = "scd41";
 #define SCD41_EXEC_REINIT_US       30000
 #define SCD41_EXEC_STOP_US         500000
 #define SCD41_EXEC_SELF_TEST_US    10000000
+#define SCD41_EXEC_FRC_US          400000
+#define SCD41_EXEC_PERSIST_US      800000
+
+// 0xFFFF is the sensor's documented "FRC failed" sentinel.
+#define SCD41_FRC_FAILED           0xFFFF
 
 // Above this, wait by sleeping; below it, busy-wait. Sleeping is preferable but
 // cannot resolve short intervals (see scd41_delay_us).
@@ -89,6 +99,14 @@ static const char *TAG = "scd41";
 
 #define SCD41_MAX_WORDS 8
 
+// First boot of the ASC-off firmware (upgrade from <= 2.0.4, or any unit that
+// has never seen this generation) latches a one-time FRC prompt. NVS key names
+// are capped at 15 characters.
+#define NVS_NAMESPACE          "aircube"
+#define NVS_KEY_ASC_OFF_GEN    "asc_off_gen"
+#define NVS_KEY_FRC_NEEDED     "frc_needed"
+#define SCD41_ASC_OFF_GEN      1
+
 static bool scd41_present = false;
 
 static uint16_t scd41_co2 = 0;
@@ -131,7 +149,68 @@ static uint8_t  scd41_frame_crc_mask = 0;
 static int64_t  scd41_frame_us = 0;
 static bool     scd41_frame_valid = false;
 
+// Latched from NVS; also kept in RAM so the live JSON frame does not hit flash.
+static bool scd41_frc_needed_flag = false;
+
 static esp_err_t scd41_recover(const char *reason);
+static esp_err_t scd41_read_words(uint16_t command, uint16_t *words, int count, uint32_t delay_us);
+
+static void scd41_nvs_set_u8(const char *key, uint8_t value)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_u8(h, key, value);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+// Mark this generation of the ASC-off policy the first time we see a Pro. That
+// is the "updated from <= 2.0.4" detector: older firmware never wrote the key.
+// Warm MCU resumes skip sensor commands, but they can still set the NVS latch
+// so the host prompt appears even before ASC is actually written.
+static void scd41_note_upgrade_nudge(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+
+    uint8_t gen = 0;
+    nvs_get_u8(h, NVS_KEY_ASC_OFF_GEN, &gen);
+
+    if (gen != SCD41_ASC_OFF_GEN) {
+        nvs_set_u8(h, NVS_KEY_ASC_OFF_GEN, SCD41_ASC_OFF_GEN);
+        nvs_set_u8(h, NVS_KEY_FRC_NEEDED, 1);
+        nvs_commit(h);
+        nvs_close(h);
+        scd41_frc_needed_flag = true;
+        ESP_LOGI(TAG, "ASC-off upgrade detected; FRC prompt armed");
+        return;
+    }
+
+    uint8_t needed = 0;
+    if (nvs_get_u8(h, NVS_KEY_FRC_NEEDED, &needed) == ESP_OK) {
+        scd41_frc_needed_flag = (needed != 0);
+    }
+    nvs_close(h);
+}
+
+bool scd41_frc_needed(void)
+{
+    return scd41_present && scd41_frc_needed_flag;
+}
+
+void scd41_clear_frc_needed(void)
+{
+    if (!scd41_frc_needed_flag) {
+        return;
+    }
+    scd41_frc_needed_flag = false;
+    scd41_nvs_set_u8(NVS_KEY_FRC_NEEDED, 0);
+    ESP_LOGI(TAG, "FRC prompt cleared");
+}
 
 // vTaskDelay() sleeps until a tick boundary, so a request of N ticks can elapse
 // as little as N-1 ticks. At the default 100 Hz tick that turns a nominal 50 ms
@@ -200,6 +279,43 @@ static void scd41_apply_temperature_offset(float offset_c)
     } else {
         ESP_LOGW(TAG, "Failed to set temperature offset: %s", esp_err_to_name(ret));
     }
+}
+
+// ASC assumes weekly exposure to ~400 ppm. AirCube Pro units often live in
+// rooms that never ventilate, so ASC is always off. Persist only when the
+// sensor still has it enabled so we don't wear EEPROM on every boot, and so
+// a warm MCU resume (which issues no sensor commands) keeps ASC off.
+static void scd41_ensure_asc_disabled(void)
+{
+    uint16_t enabled = 1;
+    esp_err_t ret = scd41_read_words(SCD41_CMD_GET_ASC_ENABLED, &enabled, 1,
+                                     SCD41_EXEC_SHORT_US);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to read ASC state: %s", esp_err_to_name(ret));
+        enabled = 1;
+    }
+
+    if (enabled == 0) {
+        ESP_LOGI(TAG, "SCD41 ASC already disabled");
+        return;
+    }
+
+    ret = scd41_send_command_arg(SCD41_CMD_SET_ASC_ENABLED, 0);
+    scd41_delay_us(SCD41_EXEC_SHORT_US);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to disable ASC: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = scd41_send_command(SCD41_CMD_PERSIST_SETTINGS);
+    scd41_delay_us(SCD41_EXEC_PERSIST_US);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "ASC disabled in RAM but persist_settings failed: %s",
+                 esp_err_to_name(ret));
+        return;
+    }
+
+    ESP_LOGI(TAG, "SCD41 ASC disabled and persisted");
 }
 
 // Send a command, wait for the execution time, then read 'count' words.
@@ -477,6 +593,7 @@ void scd41_init(bool resume_periodic)
         // and temporarily biases temperature high, so attach to the existing
         // low-power periodic stream without issuing any sensor command.
         scd41_present = true;
+        scd41_note_upgrade_nudge();
         ESP_LOGI(TAG, "SCD41 warm resume; periodic measurement left running");
         return;
     }
@@ -512,10 +629,12 @@ void scd41_init(bool resume_periodic)
 
     // Apply the static self-heating temperature offset while idle.
     scd41_apply_temperature_offset(SCD41_TEMPERATURE_OFFSET_C);
+    scd41_ensure_asc_disabled();
 
     // Low-power periodic mode produces one complete CO2/RH/T frame about every
-    // 30 seconds. This is a datasheet-supported continuous mode and keeps the
-    // default ASC timing/EEPROM behavior valid.
+    // 30 seconds. This is a datasheet-supported continuous mode. ASC is kept
+    // off (see scd41_ensure_asc_disabled) so a stuffy room cannot walk the
+    // baseline down.
     ret = scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to start low-power periodic measurement: %s",
@@ -524,6 +643,7 @@ void scd41_init(bool resume_periodic)
     }
 
     scd41_present = true;
+    scd41_note_upgrade_nudge();
     ESP_LOGI(TAG, "SCD41 initialized in low-power periodic mode (~30 s updates)");
 }
 
@@ -551,8 +671,10 @@ static esp_err_t scd41_recover(const char *reason)
         return ret;
     }
 
-    // reinit reloads user settings from EEPROM, so the offset must go back in.
+    // reinit reloads user settings from EEPROM, so the offset and ASC-off
+    // policy must go back in (ASC-off is a no-op if already persisted).
     scd41_apply_temperature_offset(SCD41_TEMPERATURE_OFFSET_C);
+    scd41_ensure_asc_disabled();
 
     ret = scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
     if (ret != ESP_OK) {
@@ -608,8 +730,9 @@ static esp_err_t scd41_self_test_locked(uint16_t *result)
         ESP_LOGE(TAG, "Self test failed: %s", esp_err_to_name(self_test_ret));
     }
 
-    // The self test leaves the sensor idle. Attempt to resume measurements even
-    // if fetching its result failed, while preserving the original error.
+    // The self test leaves the sensor idle. Re-assert ASC-off, then resume
+    // measurements even if fetching the result failed.
+    scd41_ensure_asc_disabled();
     esp_err_t restart_ret = scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
     if (restart_ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to restart low-power periodic measurement: %s",
@@ -629,6 +752,93 @@ esp_err_t scd41_self_test(uint16_t *result)
 
     xSemaphoreTake(scd41_lock, portMAX_DELAY);
     esp_err_t ret = scd41_self_test_locked(result);
+    xSemaphoreGive(scd41_lock);
+    return ret;
+}
+
+static esp_err_t scd41_forced_recalibration_locked(int16_t *correction_out)
+{
+    ESP_LOGW(TAG, "Forced recalibration to %d ppm", SCD41_FRC_TARGET_PPM);
+
+    esp_err_t ret = scd41_send_command(SCD41_CMD_STOP_PERIODIC);
+    scd41_delay_us(SCD41_EXEC_STOP_US);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "stop_periodic command failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = scd41_send_command_arg(SCD41_CMD_PERFORM_FRC, (uint16_t)SCD41_FRC_TARGET_PPM);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "FRC command failed: %s", esp_err_to_name(ret));
+        scd41_ensure_asc_disabled();
+        scd41_apply_temperature_offset(SCD41_TEMPERATURE_OFFSET_C);
+        scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
+        return ret;
+    }
+
+    scd41_delay_us(SCD41_EXEC_FRC_US);
+
+    uint8_t buf[3];
+    memset(buf, 0, sizeof(buf));
+    ret = i2c_driver_read_raw(SCD41_I2C_ADDRESS, buf, 3);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "FRC response read failed: %s", esp_err_to_name(ret));
+        scd41_ensure_asc_disabled();
+        scd41_apply_temperature_offset(SCD41_TEMPERATURE_OFFSET_C);
+        scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
+        return ret;
+    }
+    if (scd41_crc8(buf, 2) != buf[2]) {
+        ESP_LOGE(TAG, "FRC response CRC mismatch");
+        scd41_ensure_asc_disabled();
+        scd41_apply_temperature_offset(SCD41_TEMPERATURE_OFFSET_C);
+        scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
+        return ESP_ERR_INVALID_CRC;
+    }
+
+    uint16_t word = (uint16_t)((buf[0] << 8) | buf[1]);
+    if (word == SCD41_FRC_FAILED) {
+        ESP_LOGE(TAG, "FRC failed (sensor returned 0xFFFF)");
+        scd41_ensure_asc_disabled();
+        scd41_apply_temperature_offset(SCD41_TEMPERATURE_OFFSET_C);
+        scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    // The sensor encodes the correction as ppm + 0x8000. Casting the raw word
+    // straight to int16_t both skips the offset and wraps every positive
+    // correction into a large negative number (raw 32792 = +24 ppm would come
+    // out as -32744).
+    *correction_out = (int16_t)((int32_t)word - 0x8000);
+    ESP_LOGW(TAG, "FRC complete; correction %d ppm", (int)*correction_out);
+    scd41_clear_frc_needed();
+    // Drop the pre-FRC CO2 cache so the host does not treat the old reading
+    // as "already on baseline" while the next ~30 s low-power frame is taken.
+    scd41_ever_co2_valid = false;
+    scd41_co2 = 0;
+
+    scd41_ensure_asc_disabled();
+    scd41_apply_temperature_offset(SCD41_TEMPERATURE_OFFSET_C);
+    ret = scd41_send_command(SCD41_CMD_START_LOW_POWER_PERIODIC);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to restart low-power periodic measurement: %s",
+                 esp_err_to_name(ret));
+        return ret;
+    }
+    return ESP_OK;
+}
+
+esp_err_t scd41_forced_recalibration(int16_t *correction_out)
+{
+    if (!scd41_present || scd41_lock == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (correction_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(scd41_lock, portMAX_DELAY);
+    esp_err_t ret = scd41_forced_recalibration_locked(correction_out);
     xSemaphoreGive(scd41_lock);
     return ret;
 }
