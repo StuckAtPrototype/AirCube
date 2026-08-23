@@ -35,6 +35,8 @@ one file, written at offset `0x0`.
 | | |
 |---|---|
 | File | `AirCube_firmware_v2.0.6.bin` |
+| Size | 959,472 bytes |
+| SHA-256 | `34DFFC024D58FE4295AD0389292CA8E4A2171EC9F954CD23B3D388E217D009EC` |
 | Target | ESP32-H2, 2 MB flash |
 
 ```
