@@ -32,8 +32,11 @@ static const char *TAG = "serial_protocol";
 // the writer isn't woken for every packet; a history page is many times this.
 #define TX_BUF_SIZE 2048
 // Per-chunk ceiling on how long we wait for the host to drain the ring. Long
-// enough to ride out a browser hiccup, short enough that a host which has
-// stopped reading entirely cannot wedge the sensor task.
+// enough to ride out a browser hiccup. This is only ever paid once per stall:
+// after a chunk times out we assume nobody is reading and stop waiting (see
+// s_host_stalled), because paying it on every log line while the port is
+// closed stretched the sensor loop from 1 s to 3.2 s and made every button
+// press take a second to land.
 #define TX_CHUNK_TIMEOUT_MS 200
 // Must stay comfortably under TX_BUF_SIZE: the driver's write is all-or-nothing
 // against the ring, so an oversized request can never be satisfied.
@@ -64,6 +67,13 @@ extern void set_sensor_readout_period_ms(uint32_t period);
 // take it, so a log emitted mid-transfer cannot land inside a history page.
 static SemaphoreHandle_t s_tx_lock;
 static bool s_tx_direct;
+// Set when a chunk write timed out because the ring stayed full: the port is
+// closed on the host, or the cable goes to a charger. The USB peripheral keeps
+// enumerating either way, so the ring is the only reliable signal. While set,
+// writes are attempted without waiting and dropped if the ring is still full;
+// the flag clears as soon as a write goes through (host started draining) or
+// the host sends us anything (it is obviously listening).
+static volatile bool s_host_stalled;
 
 /*
  * Write straight to the USB-Serial-JTAG driver rather than through stdout.
@@ -80,7 +90,8 @@ static bool s_tx_direct;
  *
  * The driver call below copies into a ring the ISR drains, blocks while that
  * ring is full, and reports what it took, so a slow host slows us down instead
- * of losing bytes.
+ * of losing bytes. A host that is not reading at all is a different matter:
+ * once we detect that, output is dropped rather than waited on (s_host_stalled).
  */
 /*
  * Push a buffer out in ring-sized bites. Caller must hold s_tx_lock.
@@ -99,13 +110,16 @@ static void tx_locked(const char *data, size_t len)
         if (chunk > TX_CHUNK_BYTES) {
             chunk = TX_CHUNK_BYTES;
         }
-        int n = usb_serial_jtag_write_bytes(data + sent, chunk,
-                                            pdMS_TO_TICKS(TX_CHUNK_TIMEOUT_MS));
+        TickType_t wait = s_host_stalled ? 0 : pdMS_TO_TICKS(TX_CHUNK_TIMEOUT_MS);
+        int n = usb_serial_jtag_write_bytes(data + sent, chunk, wait);
         if (n <= 0) {
             // Host has stopped reading. Abandon the rest of this frame rather
-            // than block forever; the client re-requests what it never got.
+            // than block; the client re-requests what it never got, and every
+            // write until the host comes back is non-blocking.
+            s_host_stalled = true;
             break;
         }
+        s_host_stalled = false;
         sent += (size_t)n;
     }
 }
@@ -841,6 +855,11 @@ void serial_process_commands(void)
         if (len <= 0) {
             return;
         }
+
+        // A host that talks to us is reading too, even if the ring still holds
+        // stale output from before it opened the port: let the reply wait for
+        // it to drain rather than dropping it on the floor.
+        s_host_stalled = false;
 
         buffer_pos += (size_t)len;
         rx_buffer[buffer_pos] = '\0';
