@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AirCube WebUSB test</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 760px; }
+  button { font-size: 1rem; padding: 0.5rem 1rem; cursor: pointer; }
+  #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 1rem;
+         border-radius: 6px; height: 360px; overflow-y: auto; margin-top: 1rem;
+         font-family: ui-monospace, monospace; font-size: 0.85rem; }
+  .vals { display: flex; gap: 1.5rem; margin-top: 1rem; flex-wrap: wrap; }
+  .vals div { background: #f2f2f2; padding: 0.6rem 1rem; border-radius: 6px; }
+  .vals b { display: block; font-size: 1.4rem; }
+</style>
+</head>
+<body>
+<h1>AirCube WebUSB test</h1>
+<p>
+  Counterpart to <code>test_pyusb_discovery.py</code>, but via the browser's
+  WebUSB. This bypasses Crostini's USB passthrough (which drops the DTR
+  control-OUT) and talks to the ESP32-H2 USB Serial/JTAG directly. If this
+  reads JSON, a WebUSB-based reader is the way to run AirCube on a Chromebook.
+</p>
+<button id="connect">Connect to AirCube</button>
+<div class="vals">
+  <div>Temp (F)<b id="tempF">--</b></div>
+  <div>Humidity<b id="hum">--</b></div>
+  <div>eCO2<b id="eco2">--</b></div>
+  <div>TVOC<b id="tvoc">--</b></div>
+  <div>AQI<b id="aqi">--</b></div>
+</div>
+<div id="log"></div>
+
+<script>
+// ESP32-H2 USB Serial/JTAG. Same IDs the pyusb script matched.
+const VID = 0x303A, PID = 0x1001;
+
+// Layout confirmed by the pyusb descriptor dump:
+//   interface 0: interrupt IN 0x82      -> CDC comm / control (DTR target)
+//   interface 1: bulk OUT 0x01, IN 0x81 -> serial console stream (our JSON)
+//   interface 2: bulk OUT/IN            -> JTAG (ignored)
+const COMM_INTERFACE = 0;
+const DATA_INTERFACE = 1;
+const EP_IN = 1;            // 0x81 -> endpoint number 1, IN direction
+
+const logEl = document.getElementById('log');
+function log(msg) {
+  logEl.textContent += msg + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+let device = null;
+let reading = false;
+let rxBuf = "";
+
+async function connect() {
+  try {
+    device = await navigator.usb.requestDevice({ filters: [{ vendorId: VID, productId: PID }] });
+  } catch (e) {
+    log("No device selected: " + e);
+    return;
+  }
+  log("Selected: 0x" + device.vendorId.toString(16) + ":0x" + device.productId.toString(16));
+
+  await device.open();
+  if (device.configuration === null) await device.selectConfiguration(1);
+  log("Opened, configuration " + device.configuration.configurationValue);
+
+  // Claim both the comm interface (for the DTR control request) and the data
+  // interface (for the bulk IN stream). 0xFF interfaces are claimable in WebUSB.
+  for (const n of [COMM_INTERFACE, DATA_INTERFACE]) {
+    try { await device.claimInterface(n); log("claimed interface " + n); }
+    catch (e) { log("claim interface " + n + " failed: " + e); }
+  }
+
+  // Assert DTR (and RTS) -- SET_CONTROL_LINE_STATE. This is the request that
+  // times out through Crostini libusb; WebUSB should deliver it directly.
+  try {
+    const r = await device.controlTransferOut({
+      requestType: "class",
+      recipient: "interface",
+      request: 0x22,          // SET_CONTROL_LINE_STATE
+      value: 0x0003,          // bit0 DTR, bit1 RTS
+      index: COMM_INTERFACE
+    });
+    log("SET_CONTROL_LINE_STATE -> " + r.status);
+  } catch (e) {
+    log("SET_CONTROL_LINE_STATE failed: " + e + " (reading anyway)");
+  }
+
+  reading = true;
+  log("\nReading... (move/breathe near the sensor)\n");
+  readLoop();
+}
+
+async function readLoop() {
+  while (reading && device) {
+    let result;
+    try {
+      result = await device.transferIn(EP_IN, 64);
+    } catch (e) {
+      log("read error: " + e);
+      break;
+    }
+    if (result.status !== "ok") { log("transfer status: " + result.status); continue; }
+    if (result.data && result.data.byteLength) {
+      const text = new TextDecoder().decode(result.data);
+      rxBuf += text;
+      let nl;
+      while ((nl = rxBuf.indexOf("\n")) >= 0) {
+        const line = rxBuf.slice(0, nl).trim();
+        rxBuf = rxBuf.slice(nl + 1);
+        if (line) handleLine(line);
+      }
+    }
+  }
+}
+
+function handleLine(line) {
+  log("RX: " + line);
+  try {
+    const j = JSON.parse(line);
+    if (j.ens210) {
+      document.getElementById("tempF").textContent = j.ens210.temperature_f?.toFixed(1) ?? "--";
+      document.getElementById("hum").textContent   = j.ens210.humidity?.toFixed(0) ?? "--";
+    }
+    if (j.ens16x) {
+      document.getElementById("eco2").textContent = j.ens16x.eco2 ?? "--";
+      document.getElementById("tvoc").textContent = j.ens16x.etvoc ?? "--";
+      document.getElementById("aqi").textContent  = j.ens16x.aqi ?? "--";
+    }
+  } catch (e) { /* non-JSON console line; already logged raw */ }
+}
+
+document.getElementById("connect").addEventListener("click", connect);
+if (!("usb" in navigator)) {
+  log("WebUSB not available. Use Chrome, and serve this page over https or http://localhost (a secure context).");
+}
+</script>
+</body>
+</html>
