@@ -1,6 +1,6 @@
 # Contributing to AirCube
 
-AirCube is fully open source -- firmware, hardware, desktop software, Home Assistant integration, and SmartThings Edge driver. Whether you want to fix a bug, add a feature, improve the docs, or port the desktop app to another platform, contributions are welcome.
+AirCube is fully open source -- firmware, hardware, the browser and desktop apps, Home Assistant integration, and SmartThings Edge driver. Whether you want to fix a bug, add a feature, improve the docs, or port the desktop app to another platform, contributions are welcome.
 
 This document covers everything you need to get the project building on your machine and understand how the code is organized.
 
@@ -13,6 +13,9 @@ This document covers everything you need to get the project building on your mac
 | Customer-facing README | [README.md](README.md) |
 | Home Assistant setup guide | [HOME_ASSISTANT.md](HOME_ASSISTANT.md) |
 | SmartThings setup guide | [SMARTTHINGS.md](SMARTTHINGS.md) |
+| Firmware update guide | [FIRMWARE_UPDATE.md](FIRMWARE_UPDATE.md) |
+| BLE GATT protocol | [docs/BLE_GATT_PROTOCOL.md](docs/BLE_GATT_PROTOCOL.md) |
+| Video walkthroughs | [StuckAtPrototype Labs](https://www.youtube.com/@StuckAtPrototypeLabs) on YouTube |
 | Issue tracker | [GitHub Issues](https://github.com/StuckAtPrototype/AirCube/issues) |
 | License | [Apache 2.0](LICENSE) |
 
@@ -24,6 +27,7 @@ This document covers everything you need to get the project building on your mac
 AirCube/
 ├── firmware/              # ESP-IDF firmware for the ESP32-H2
 │   ├── CMakeLists.txt     # Top-level CMake (IDF project)
+│   ├── version.txt        # Firmware version string (reported over serial and Zigbee sw_build_id)
 │   └── main/
 │       ├── main.c                # App entry point, FreeRTOS tasks, LED loop
 │       ├── device_model.c/h      # Base vs Pro detection (SCD41 / VCNL4040 presence)
@@ -52,7 +56,19 @@ AirCube/
 │   ├── aircube_replay_script.py   # Replay logged CSV with timing
 │   ├── build_exe.py               # PyInstaller build for desktop app
 │   ├── aircube.spec               # PyInstaller spec
+│   ├── build_web_manifest.py      # Stages release binaries + manifest for AirCube Web
+│   ├── selftest.html              # Browser self-test for the web app
 │   └── requirements.txt
+│
+├── web/                   # AirCube Web -- browser app (Web Serial): live data, settings, flashing
+│   ├── index.html
+│   ├── js/, css/, vendor/
+│   └── README.md
+│
+├── docs/
+│   └── BLE_GATT_PROTOCOL.md   # BLE GATT / BTHome protocol reference
+│
+├── releases/              # Release notes per firmware version
 │
 ├── kicad/                 # PCB design (KiCad)
 │   ├── AirCube.kicad_pro/sch/pcb  # Schematic & layout
@@ -67,8 +83,9 @@ AirCube/
 ├── zha/                   # Home Assistant ZHA quirk
 │   └── aircube.py
 │
-├── z2m/                   # Zigbee2MQTT external converter
-│   └── aircube.js
+├── z2m/                   # Zigbee2MQTT external converters
+│   ├── aircube.mjs        # Z2M 2.x (ES module) -- includes Pro CO2 + illuminance
+│   └── aircube.js         # Z2M 1.x (legacy CommonJS) -- six core entities only
 │
 ├── smartthings/           # Samsung SmartThings Edge driver (Zigbee hub)
 │   ├── README.md
@@ -81,6 +98,7 @@ AirCube/
 │
 ├── README.md              # Customer-facing product page
 ├── ASSEMBLY.md            # Enclosure assembly guide (Base and Pro)
+├── FIRMWARE_UPDATE.md     # Flashing from the browser with AirCube Web
 ├── HOME_ASSISTANT.md      # Home Assistant integration guide
 ├── SMARTTHINGS.md         # SmartThings hub + CLI integration guide
 ├── CONTRIBUTING.md        # This file
@@ -184,7 +202,7 @@ Home Assistant / SmartThings ──► Zigbee Analog Output write ──► led_
 - `serial_protocol.c` -- JSON-over-USB serial interface. Sends periodic sensor data, accepts commands (see Serial Protocol below).
 - `radio_mode.c` -- Chooses BLE or Zigbee at boot and manages the transition between them. Default boot mode is **BLE**, unless NVS records the device as already Zigbee-joined or a pairing request is pending. A long button press while in BLE mode sets an NVS pairing flag and reboots (`esp_restart()`) into Zigbee mode, where network steering begins and consumes the flag; a long press while already in Zigbee mode starts steering directly, with no reboot. `radio_mode_revert_to_ble()` clears the NVS flags and reboots back to BLE if steering fails/times out on a factory-new device, or if the device is removed from its Zigbee network.
 - `ble_gatt.c` -- BLE GATT server (service UUID `A17C0DE0-...`: Device Info, Live Data, History Request/Data, Brightness) plus inline BTHome v2 advertising, active only while the device is in BLE mode. See [`docs/BLE_GATT_PROTOCOL.md`](docs/BLE_GATT_PROTOCOL.md) for the full protocol.
-- `zigbee.c` -- Registers a Zigbee End Device on the ESP32-H2's native 802.15.4 radio, active only while the device is in Zigbee mode. Exposes temperature/humidity via standard ZCL clusters, eCO2/eTVOC/VOC Level via custom cluster 0xFC01, LED brightness via the standard Analog Output cluster (0x000D), and on Pro hardware, true CO2 and illuminance via standard clusters not yet exposed by any integration (see "Zigbee Integration" below).
+- `zigbee.c` -- Registers a Zigbee End Device on the ESP32-H2's native 802.15.4 radio, active only while the device is in Zigbee mode. Exposes temperature/humidity via standard ZCL clusters, eCO2/eTVOC/VOC Level via custom cluster 0xFC01, LED brightness via the standard Analog Output cluster (0x000D), and on Pro hardware, true CO2 and illuminance via the standard CO2 (0x040D) and Illuminance (0x0400) clusters (see "Zigbee Integration" below).
 
 **Storage**
 
@@ -301,12 +319,17 @@ The ESP32-H2 has a native IEEE 802.15.4 radio. AirCube registers as a Zigbee End
 | Carbon Dioxide Measurement | 0x040D | `measuredValue` (float, ppm) -- **Pro only**, true CO2 from the SCD41 |
 | Illuminance Measurement | 0x0400 | `measuredValue` (uint16, lux) -- **Pro only**, from the VCNL4040 |
 
-The custom cluster requires a **ZHA quirk** or **Zigbee2MQTT external converter** on the Home Assistant side. Both are included in the repo (`zha/aircube.py` and `z2m/aircube.js`). On a **Samsung SmartThings** hub, use the Edge driver in `smartthings/aircube-zigbee/` and follow [SMARTTHINGS.md](SMARTTHINGS.md).
+The custom cluster requires a **ZHA quirk** or **Zigbee2MQTT external converter** on the Home Assistant side. Both are included in the repo (`zha/aircube.py`, and `z2m/aircube.mjs` for Z2M 2.x / `z2m/aircube.js` for Z2M 1.x). On a **Samsung SmartThings** hub, use the Edge driver in `smartthings/aircube-zigbee/` and follow [SMARTTHINGS.md](SMARTTHINGS.md).
 
-**Pro's CO2 (0x040D) and illuminance (0x0400) clusters are firmware-only today.** They're declared
-on the Zigbee endpoint, but the ZHA quirk, Z2M converter, and SmartThings Edge driver in this repo
-do not currently read them, so they won't appear as entities on any hub yet. Contributions to wire
-these up in the integrations are welcome.
+**Pro's CO2 (0x040D) and illuminance (0x0400) clusters are standard ZCL**, so they need no custom
+handling on the coordinator side. Per integration:
+
+| Integration | Pro CO2 + illuminance |
+|-------------|-----------------------|
+| ZHA | Discovered automatically from the standard clusters; the quirk only has to leave them alone |
+| Zigbee2MQTT 2.x (`aircube.mjs`) | Exposed via `m.co2()` / `m.illuminance()`, gated on the cluster being present so Base units don't show them |
+| Zigbee2MQTT 1.x (`aircube.js`) | Not exposed (legacy converter, six core entities only) |
+| SmartThings Edge driver | Not exposed -- the profile's `carbonDioxideMeasurement` carries eCO2 from 0xFC01. Contributions welcome |
 
 See [HOME_ASSISTANT.md](HOME_ASSISTANT.md) for Home Assistant setup instructions.
 
@@ -383,9 +406,11 @@ The standalone tray app build lives in its own repo: [AirCubeTray](https://githu
 
 | Part | Description |
 |------|------------|
-| ESP32-H2-MINI-1 | MCU with 802.15.4 (Zigbee/Thread) radio |
-| ENS210 | Temperature and humidity sensor (I2C) |
+| ESP32-H2-MINI-1 | MCU with 802.15.4 (Zigbee/Thread) and BLE radio |
 | ENS161 / ENS16X | Air quality sensor -- eTVOC, eCO2, VOC Level (I2C) |
+| ENS210 | Temperature and humidity sensor (I2C) -- **Base** |
+| Sensirion SCD41 | True NDIR CO2 plus temperature and humidity (I2C) -- **Pro** |
+| Vishay VCNL4040 | Ambient light sensor for LED auto-dim (I2C) -- **Pro** |
 | WS2812 x3 | RGB LEDs |
 | USB-C connector | Power and data |
 | Tactile button | Brightness control and Zigbee pairing |
@@ -393,6 +418,8 @@ The standalone tray app build lives in its own repo: [AirCubeTray](https://githu
 ### PCB
 
 KiCad project files are in `kicad/`. Includes schematic, layout, Gerber files for manufacturing, and a BOM CSV.
+
+Wondering about the cutouts in the board? [These Holes Are Why My Circuit Board Works](https://www.youtube.com/watch?v=1yfeTHR3lqw) walks through why they're there.
 
 ### Enclosure
 

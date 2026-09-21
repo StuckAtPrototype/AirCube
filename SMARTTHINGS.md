@@ -2,7 +2,7 @@
 
 This guide walks you through pairing AirCube to a **SmartThings-compatible Zigbee hub** and installing the community **AirCube Zigbee** Edge driver so you get **temperature, humidity, eCO2, eTVOC, and VOC Level** in the SmartThings app.
 
-> **Default behavior:** Without this driver, SmartThings often joins AirCube as a generic **humidity / temperature** device. You only get **temp and humidity**. The Edge driver adds the **air quality** sensors over Zigbee cluster `0xFC01` (same idea as the [ZHA quirk](zha/aircube.py) and [Zigbee2MQTT converter](z2m/aircube.js)).
+> **Default behavior:** Without this driver, SmartThings often joins AirCube as a generic **humidity / temperature** device. You only get **temp and humidity**. The Edge driver adds the **air quality** sensors over Zigbee cluster `0xFC01` (same idea as the [ZHA quirk](zha/aircube.py) and [Zigbee2MQTT converter](z2m/aircube.mjs)).
 
 **You will need**
 
@@ -197,7 +197,7 @@ Gas sensors may read **0** for the first few minutes after power-on — that is 
 
 ## Technical reference
 
-Zigbee layout (endpoint **10**): standard temp/humidity clusters; custom air quality cluster **`0xFC01`**; LED brightness uses Analog Output **`0x000D`** (not exposed in this driver v1). Details match [CONTRIBUTING.md](CONTRIBUTING.md) → *Zigbee Integration*.
+Zigbee layout (endpoint **10**): standard temp/humidity clusters; custom air quality cluster **`0xFC01`**; LED brightness uses Analog Output **`0x000D`** (not exposed in this driver v1). **AirCube Pro** additionally declares the standard CO2 (**`0x040D`**) and Illuminance (**`0x0400`**) clusters; this driver does not read them yet, so the app's **CO₂** tile shows eCO2 from `0xFC01` on both models. Details match [CONTRIBUTING.md](CONTRIBUTING.md) → *Zigbee Integration*.
 
 ---
 

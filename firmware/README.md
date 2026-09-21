@@ -6,7 +6,7 @@ For product documentation, integration guides, and the full architecture/build r
 
 - [`../README.md`](../README.md) — product overview, sensor readings, LED behavior
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — firmware architecture, module layout, serial protocol reference
-- [`../FIRMWARE_UPDATE.md`](../FIRMWARE_UPDATE.md) — flashing a prebuilt binary over USB via ESP Launchpad
+- [`../FIRMWARE_UPDATE.md`](../FIRMWARE_UPDATE.md) — flashing a prebuilt binary over USB from the browser with AirCube Web
 - [`../docs/BLE_GATT_PROTOCOL.md`](../docs/BLE_GATT_PROTOCOL.md) — BLE GATT protocol reference
 
 ## Build and flash

@@ -2,6 +2,8 @@
 
 Update your AirCube from the browser with [AirCube Web](https://stuckatprototype.github.io/AirCube/). It talks to the cube over USB using the Web Serial API, so there is nothing to install -- and once you are connected you also get live readings, the LED brightness control and your history, the same as the desktop app.
 
+**Prefer to watch?** [Updating the AirCube is easy (web UI)](https://www.youtube.com/watch?v=4XfEABJolAE) shows the whole process in under two minutes.
+
 ## Prerequisites
 
 - **Browser:** Google Chrome or Microsoft Edge (Safari and Firefox do not support Web Serial)

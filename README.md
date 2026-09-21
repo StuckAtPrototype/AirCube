@@ -6,7 +6,9 @@ Works standalone out of the box. Pairs with Home Assistant in minutes. Other pla
 
 [AirCube Web](https://stuckatprototype.github.io/AirCube/) -- Live readings, history and firmware updates in your browser. Nothing to install.
 
-[Watch the demo](https://youtu.be/m12KpLyLCrw) (early build -- Home Assistant integration came after this video)
+[Watch the overview](https://www.youtube.com/watch?v=a4EFVtmDL8s) -- What AirCube does and why it's open source, in under three minutes.
+
+[StuckAtPrototype Labs](https://www.youtube.com/@StuckAtPrototypeLabs) -- Step-by-step video walkthroughs: [ZHA setup](https://www.youtube.com/watch?v=rpkR3O64rY8), [Zigbee2MQTT setup](https://www.youtube.com/watch?v=eybU8-ZFDcc), and [updating firmware from the browser](https://www.youtube.com/watch?v=4XfEABJolAE).
 
 [AirCube](https://stuckatprototype.com/products/aircube) -- Assembled AirCube
 
@@ -109,7 +111,7 @@ The ENS161 needs about **3 minutes** of warm-up in standard mode before readings
 
 AirCube was designed for Home Assistant. It connects over **Zigbee** -- no USB cable to your server, no cloud, no Wi-Fi credentials to configure. Plug it in, hold the button for 3 seconds to start pairing, and six core entities show up: temperature, humidity, eCO2, eTVOC, VOC Level, and brightness.
 
-AirCube Pro's true CO2 and illuminance entities are also available with the **Zigbee2MQTT 2.x** converter. The current ZHA quirk exposes the six core entities on both models.
+**AirCube Pro** adds two more: **true CO2** (SCD41) and **illuminance** (VCNL4040). Both are exposed in **ZHA** and **Zigbee2MQTT 2.x** -- eight entities total on a Pro.
 
 Once connected you can:
 - **Track air quality over time** with built-in history graphs
@@ -120,7 +122,7 @@ Once connected you can:
 
 **Works with** ZHA (built-in) and Zigbee2MQTT.
 
-**Video walkthrough:** [Set up AirCube with ZHA in Home Assistant](https://www.youtube.com/watch?v=rpkR3O64rY8)
+**Video walkthroughs:** [Set up AirCube with ZHA](https://www.youtube.com/watch?v=rpkR3O64rY8) · [Set up AirCube with Zigbee2MQTT](https://www.youtube.com/watch?v=eybU8-ZFDcc)
 
 **Full setup guide:** **[Connecting AirCube to Home Assistant](HOME_ASSISTANT.md)**
 
@@ -179,9 +181,11 @@ Select your serial port, click **Connect**, and you'll see live data.
 
 ## Firmware Updates
 
-The current firmware is **v2.0.5**. On Pro units it disables SCD41 automatic self-calibration, adds a 425 ppm fresh-air calibration, and prompts once after an upgrade from 2.0.4 or older. See the [v2.0.5 release notes](releases/RELEASE_NOTES_v2.0.5.md).
+The current firmware is **v2.0.7**. It keeps the cube responsive when plugged into a charger or closed port, and on Pro units it disables SCD41 automatic self-calibration (replaced by a 425 ppm fresh-air calibration) and detects a CO2 channel that has stopped reporting. See the [v2.0.7 release notes](releases/RELEASE_NOTES_v2.0.7.md).
 
 **[Flash it now with AirCube Web](https://stuckatprototype.github.io/AirCube/)** or read the **[Firmware Update Guide](FIRMWARE_UPDATE.md)** for step-by-step instructions.
+
+**Video walkthrough:** [Updating the AirCube is easy (web UI)](https://www.youtube.com/watch?v=4XfEABJolAE) -- under two minutes, start to finish.
 
 All releases: [GitHub Releases](https://github.com/StuckAtPrototype/AirCube/releases)
 
@@ -264,6 +268,9 @@ Same gradient shape as above, but driven by **AQI-S** (relative, 24-hour baselin
 **Home Assistant: eCO2, TVOC, or VOC Level sensors are missing**
 - The custom quirk or converter isn't loaded yet. See the [Home Assistant guide](HOME_ASSISTANT.md) for step-by-step instructions.
 
+**Home Assistant: CO2 or Illuminance is missing (Pro)**
+- These come from standard Zigbee clusters, so ZHA and Zigbee2MQTT 2.x pick them up without any extra configuration. If they're absent, confirm the unit is a Pro (Base has no SCD41 or VCNL4040), then remove and re-pair so the coordinator re-reads the endpoint. The legacy Zigbee2MQTT 1.x converter does not expose them.
+
 **Home Assistant: AirCube won't pair**
 - Make sure permit join is enabled in ZHA or Zigbee2MQTT.
 - Hold the button for 3 seconds to enter pairing mode (LED flashes blue).
@@ -275,10 +282,11 @@ Same gradient shape as above, but driven by **AQI-S** (relative, 24-hour baselin
 
 AirCube is fully open source -- firmware, PCB design, enclosure, desktop software, and Home Assistant integration. Community-contributed integrations (see **[Community extensions](#community-extensions)**) also live in this repository. Everything is under the Apache 2.0 license.
 
-**Developers and makers:** See the **[Contributing Guide](CONTRIBUTING.md)** for build instructions, architecture docs, serial protocol reference, and how to submit changes.
+**Developers and makers:** See the **[Contributing Guide](CONTRIBUTING.md)** for build instructions, architecture docs, serial protocol reference, and how to submit changes. Curious about the PCB? [These Holes Are Why My Circuit Board Works](https://www.youtube.com/watch?v=1yfeTHR3lqw) explains the cutouts in the board.
 
 | | |
 |---|---|
+| [StuckAtPrototype Labs](https://www.youtube.com/@StuckAtPrototypeLabs) | Video walkthroughs: ZHA, Zigbee2MQTT, firmware updates |
 | [Contributing Guide](CONTRIBUTING.md) | Build from source, firmware architecture, serial protocol, how to contribute |
 | [Assembly Guide](ASSEMBLY.md) | Assemble the printed enclosure -- Base and Pro |
 | [BLE GATT Protocol](docs/BLE_GATT_PROTOCOL.md) | BLE GATT protocol reference for building custom BLE clients |

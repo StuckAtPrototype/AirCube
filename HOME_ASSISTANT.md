@@ -1,10 +1,13 @@
 # Connecting AirCube to Home Assistant
 
-This guide walks you through adding your AirCube air quality monitor to Home Assistant over Zigbee. After setup, you'll have live temperature, humidity, eCO2, eTVOC, and VOC Level readings plus a brightness slider in your smart home dashboard.
+This guide walks you through adding your AirCube air quality monitor to Home Assistant over Zigbee. After setup, you'll have live temperature, humidity, eCO2, eTVOC, and VOC Level readings plus a brightness slider in your smart home dashboard. On an **AirCube Pro** you also get true CO2 and illuminance.
 
 The AirCube works with both **ZHA** (built-in) and **Zigbee2MQTT**. Pick whichever you already use. If you're starting fresh, ZHA is simpler.
 
-**Prefer to follow along?** [Watch the AirCube ZHA integration walkthrough on YouTube](https://www.youtube.com/watch?v=rpkR3O64rY8).
+**Prefer to follow along?** Both methods have a step-by-step video on the [StuckAtPrototype Labs](https://www.youtube.com/@StuckAtPrototypeLabs) channel:
+
+- [AirCube Home Assistant ZHA Walkthrough](https://www.youtube.com/watch?v=rpkR3O64rY8) -- includes installing the ZHA integration and the File editor
+- [AirCube Home Assistant Z2M Walkthrough](https://www.youtube.com/watch?v=eybU8-ZFDcc)
 
 > **A note on names.** Home Assistant renamed a couple of things in 2026.2, so the menus below are listed with both names -- use whichever your version shows:
 >
@@ -38,6 +41,8 @@ Any Zigbee 3.0 coordinator works. If you don't have one yet, the **SONOFF ZBDong
 # Method A -- ZHA (Recommended)
 
 Use this method if you're using Home Assistant's built-in **Zigbee Home Automation** integration (the default). No extra apps (add-ons) required.
+
+**Video:** [AirCube Home Assistant ZHA Walkthrough](https://www.youtube.com/watch?v=rpkR3O64rY8) covers every step below.
 
 ## A1 -- Set Up ZHA
 
@@ -293,14 +298,23 @@ Go to **Settings > Zigbee > Devices** (**Settings > Devices & Services > ZHA** o
 | Brightness | LED brightness (slider) | 0--100 |
 
 > Temperature and humidity are detected automatically by ZHA. eCO2, eTVOC, and VOC Level come from the custom quirk. The brightness slider uses the standard Analog Output cluster.
->
-> **AirCube Pro:** The current ZHA quirk exposes these same six entities. The Pro's dedicated true CO2 and illuminance sensors are not yet exposed by ZHA; use Zigbee2MQTT 2.x if you need those two entities in Home Assistant.
+
+**AirCube Pro** shows two more entities, for eight total:
+
+| Entity | What It Does | Unit |
+|--------|-------------|------|
+| Carbon dioxide | True CO2 from the SCD41 (direct NDIR measurement) | ppm |
+| Illuminance | Ambient light from the VCNL4040 | lx |
+
+> These use the standard Zigbee CO2 (0x040D) and Illuminance (0x0400) clusters, so ZHA discovers them on its own -- the quirk doesn't need to do anything. They only exist on Pro hardware; a Base has neither sensor. Exact entity labels can vary slightly between Home Assistant versions.
 
 ---
 
 # Method B -- Zigbee2MQTT
 
 Use this method if you prefer Zigbee2MQTT or already have it running.
+
+**Video:** [AirCube Home Assistant Z2M Walkthrough](https://www.youtube.com/watch?v=eybU8-ZFDcc) covers every step below.
 
 ## B1 -- Install MQTT Broker
 
@@ -462,6 +476,7 @@ Edit your dashboard, click **Add Card**, choose **Entities**, and select:
 - AirCube tVOC
 - AirCube VOC Level
 - AirCube Brightness
+- AirCube Carbon dioxide and AirCube Illuminance (Pro only)
 
 ### VOC Level Gauge
 
@@ -542,6 +557,13 @@ The LED follows **canonical VOC Level** (TVOC-derived) on a continuous green-to-
   - You're using `aircube.mjs`, not `aircube.js` — Z2M 2.x requires ES module format. If Z2M renames the file to `aircube.mjs.invalid`, the converter has a load error; check the Z2M logs.
   - After fixing any of the above, restart Z2M and then **re-interview** the device (device page > *Reconfigure*) so the custom cluster is registered.
 - **Z2M 1.x:** Check that `external_converters` is in the Z2M `configuration.yaml` and `aircube.js` is in the `zigbee2mqtt` folder. Restart Zigbee2MQTT.
+
+### CO2 or Illuminance is missing (Pro)
+
+- These two entities come from **standard** Zigbee clusters, not the custom one, so they don't depend on the quirk or converter. ZHA and Zigbee2MQTT 2.x pick them up automatically.
+- Confirm the unit is a **Pro**. A Base has no SCD41 or VCNL4040, so the firmware never declares those clusters.
+- The clusters are read when the device first joins. If you flashed a Pro after pairing it, or the entities never appeared, **remove and re-pair** (ZHA) or **Reconfigure** the device (Z2M) so the coordinator re-reads the endpoint.
+- **Z2M 1.x:** the legacy `aircube.js` converter does not expose these. Move to Z2M 2.x and `aircube.mjs`.
 
 ### eCO2 / eTVOC / VOC Level values are stuck at 0
 
