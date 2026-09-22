@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AirCube Web Serial signal tester</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 820px; }
+  button { font-size: 0.95rem; padding: 0.45rem 0.9rem; cursor: pointer; margin: 0.15rem; }
+  #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 1rem;
+         border-radius: 6px; height: 340px; overflow-y: auto; margin-top: 1rem;
+         font-family: ui-monospace, monospace; font-size: 0.82rem; }
+  .row { margin: 0.5rem 0; }
+  .vals { display: flex; gap: 1.2rem; margin-top: 1rem; flex-wrap: wrap; }
+  .vals div { background: #f2f2f2; padding: 0.5rem 0.9rem; border-radius: 6px; }
+  .vals b { display: block; font-size: 1.3rem; }
+  #count { font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>AirCube Web Serial signal tester</h1>
+<p>
+  Goal: find the DTR/RTS combination that makes the ESP32-H2 USB Serial/JTAG
+  stream. Open the port (no signals forced), then try buttons one at a time and
+  watch the byte counter. Setting RTS may reset the chip into download mode --
+  if the port disconnects, that is what happened.
+</p>
+
+<div class="row">
+  <button id="connect">1. Connect (open, no signals)</button>
+  <span id="count">bytes: 0</span>
+</div>
+<div class="row">
+  <button data-dtr="1" data-rts="0">DTR=1 RTS=0</button>
+  <button data-dtr="0" data-rts="0">DTR=0 RTS=0</button>
+  <button data-dtr="1" data-rts="1">DTR=1 RTS=1</button>
+  <button data-dtr="0" data-rts="1">DTR=0 RTS=1</button>
+  <button id="pulseDtr">Pulse DTR (0-&gt;1)</button>
+</div>
+
+<div class="vals">
+  <div>Temp (F)<b id="tempF">--</b></div>
+  <div>Humidity<b id="hum">--</b></div>
+  <div>eCO2<b id="eco2">--</b></div>
+  <div>TVOC<b id="tvoc">--</b></div>
+  <div>AQI<b id="aqi">--</b></div>
+</div>
+<div id="log"></div>
+
+<script>
+const VID = 0x303A;
+const logEl = document.getElementById("log");
+const countEl = document.getElementById("count");
+function log(m) { logEl.textContent += m + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+
+let port = null, reading = false, rxBuf = "", totalBytes = 0;
+
+navigator.serial?.addEventListener("disconnect", (e) => {
+  log("*** PORT DISCONNECTED (device reset / re-enumerated). Reconnect to continue. ***");
+  reading = false;
+});
+
+async function setSig(dtr, rts) {
+  if (!port) { log("not connected"); return; }
+  try {
+    await port.setSignals({ dataTerminalReady: !!dtr, requestToSend: !!rts });
+    log(`setSignals DTR=${dtr} RTS=${rts} -> ok`);
+  } catch (e) { log("setSignals failed: " + e); }
+}
+
+async function connect() {
+  if (!("serial" in navigator)) { log("Web Serial unavailable (use Chrome over localhost/https)."); return; }
+  try { port = await navigator.serial.requestPort({ filters: [{ usbVendorId: VID }] }); }
+  catch (e) { log("no port selected: " + e); return; }
+  const i = port.getInfo();
+  log("selected 0x" + (i.usbVendorId||0).toString(16) + ":0x" + (i.usbProductId||0).toString(16));
+  try { await port.open({ baudRate: 115200 }); log("opened 115200"); }
+  catch (e) { log("open failed: " + e); return; }
+  reading = true; totalBytes = 0;
+  // DTR=0 RTS=1 is the combo that makes this ESP32-H2 USB Serial/JTAG stream.
+  // DTR=1 resets/halts the chip, so we explicitly hold DTR low and RTS high.
+  await setSig(0, 1);
+  log("\nlistening (DTR=0 RTS=1)...\n");
+  readLoop();
+}
+
+async function readLoop() {
+  const dec = new TextDecoder();
+  let reader;
+  try { reader = port.readable.getReader(); }
+  catch (e) { log("getReader failed: " + e); return; }
+  try {
+    while (reading) {
+      const { value, done } = await reader.read();
+      if (done) { log("reader done"); break; }
+      if (value && value.length) {
+        totalBytes += value.length;
+        countEl.textContent = "bytes: " + totalBytes;
+        rxBuf += dec.decode(value);
+        let nl;
+        while ((nl = rxBuf.indexOf("\n")) >= 0) {
+          const line = rxBuf.slice(0, nl).trim();
+          rxBuf = rxBuf.slice(nl + 1);
+          if (line) handleLine(line);
+        }
+      }
+    }
+  } catch (e) { log("read error: " + e); }
+  finally { try { reader.releaseLock(); } catch (e) {} }
+}
+
+function handleLine(line) {
+  log("RX: " + line);
+  try {
+    const j = JSON.parse(line);
+    if (j.ens210) {
+      document.getElementById("tempF").textContent = j.ens210.temperature_f?.toFixed(1) ?? "--";
+      document.getElementById("hum").textContent   = j.ens210.humidity?.toFixed(0) ?? "--";
+    }
+    if (j.ens16x) {
+      document.getElementById("eco2").textContent = j.ens16x.eco2 ?? "--";
+      document.getElementById("tvoc").textContent = j.ens16x.etvoc ?? "--";
+      document.getElementById("aqi").textContent  = j.ens16x.aqi ?? "--";
+    }
+  } catch (e) {}
+}
+
+document.getElementById("connect").addEventListener("click", connect);
+document.querySelectorAll("button[data-dtr]").forEach(b =>
+  b.addEventListener("click", () => setSig(+b.dataset.dtr, +b.dataset.rts)));
+document.getElementById("pulseDtr").addEventListener("click", async () => {
+  await setSig(0, 0); await new Promise(r => setTimeout(r, 100)); await setSig(1, 0);
+});
+if (!("serial" in navigator)) log("Web Serial unavailable (use Chrome over localhost/https).");
+</script>
+</body>
+</html>
