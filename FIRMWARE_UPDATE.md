@@ -53,6 +53,7 @@ Use the **Local .bin** button in the flash dialog to pick the file, then choose 
 - **Charge-only cable:** Some USB-C cables carry power but no data. Use the same cable that works with the desktop app.
 - **Linux:** If the device never appears, your user may need permission for the ESP USB device. Add a udev rule for `303a:1001` or add yourself to the `dialout` group, then replug.
 - **The cube doesn't reconnect after flashing:** Unplug and replug the USB-C cable, then click Connect again.
+- **"Firmware update needed" banner, brightness and history unavailable:** The cube is running firmware from before February 2026 (shipped through January 2026). That firmware streams readings over USB but does not listen for commands on it, so only live readings work until it is updated. Click **Update firmware** on the banner; flashing works on these units because the bootloader, not the firmware, handles the transfer. If the flash does not start, unplug the cube, plug it back in and click **Update firmware** again straight away. AirCube Tray can hang on these units; use the web app to update them.
 
 ## Alternatives
 

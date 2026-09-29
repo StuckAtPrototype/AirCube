@@ -247,6 +247,17 @@ after the first boot of the ASC-off firmware (an upgrade from <= 2.0.4) until th
 
 All commands are JSON with a `"cmd"` field. Send a complete JSON object followed by `\n`.
 
+**Firmware before 2026-02-08 is talk-only over USB.** Those builds (everything shipped through
+January 2026) read commands from UART0 and only *print* to USB-Serial-JTAG, so no command sent
+over USB is ever answered. Worse, the ESP32-H2's USB-Serial-JTAG receive FIFO holds 64 bytes and
+nothing drains it: after that many bytes the device NAKs every packet and a host `write()` blocks
+forever (pyserial without `write_timeout`, or a Web Serial write promise that never settles).
+Reads keep working, and the ROM bootloader drains the FIFO on reset, so flashing still works.
+A host must therefore detect a cube that streams readings but never answers `get_config` and
+stop writing to it, spending fewer than 64 bytes finding out. The web app does this
+(`PROBE_MAX_ATTEMPTS` in `web/js/devices.js`, `WRITE_STALL_MS` in `web/js/serial.js`); tray and
+CLI clients should set a write timeout and do the same.
+
 | Command | Payload | Response |
 |---------|---------|----------|
 | `get_config` | `{"cmd":"get_config"}` | `{"config":{"intensity":0.60,"readout_period":1000,"auto_dim":{...}}}` |

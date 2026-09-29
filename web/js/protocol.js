@@ -33,6 +33,22 @@ const num = (v) => {
 };
 
 /**
+ * Shown wherever a cube turns out to be running firmware that streams readings
+ * but cannot hear commands (see Device.commandSupport in devices.js).
+ *
+ * Cubes shipped before February 2026 read commands from the UART0 pins rather
+ * than the USB Serial/JTAG port, so over USB they are talk-only: the live
+ * frame arrives every second, but get_config, set_intensity and the history
+ * commands are never seen. Worse, every byte the host sends piles up in the
+ * chip's 64-byte USB receive FIFO, and once that is full the host's writes hang.
+ * Firmware from 2026-02-08 onwards (release 1.3 and later) reads the USB port.
+ */
+export const LEGACY_FIRMWARE_MESSAGE =
+  "This AirCube runs firmware from before February 2026, which cannot receive " +
+  "commands over USB. Live readings work, but brightness, history and settings " +
+  "need a firmware update. Updating takes about 30 seconds.";
+
+/**
  * Parse the periodic sensor JSON object into a normalized live reading.
  *
  * Since firmware 1.5.0 `ens16x.aqi` is the VOC Level index (0-500), which is a

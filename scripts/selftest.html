@@ -426,9 +426,152 @@
         }
       })();
 
+      // --- pre-February-2026 firmware -------------------------------------
+      // Those cubes stream live frames over USB but never read the port, so
+      // every command lands in a 64-byte FIFO for good. The web app must work
+      // out that nobody is listening while spending fewer bytes than that, and
+      // then stop writing.
+      const fakePort = ({ writeBehaviour = "accept" } = {}) => {
+        let written = 0;
+        const writer = {
+          write(bytes) {
+            written += bytes.length;
+            if (writeBehaviour === "hang") return new Promise(() => {});
+            return Promise.resolve();
+          },
+          releaseLock() {},
+        };
+        return {
+          open: async () => {},
+          setSignals: async () => {},
+          close: async () => {},
+          readable: null,
+          writable: { getWriter: () => writer },
+          get written() {
+            return written;
+          },
+        };
+      };
+      const baseLine = JSON.stringify({
+        ens210: { status: 0, temperature_c: 27, temperature_f: 80.6, humidity: 55 },
+        ens16x: { status: "OK", etvoc: 1400, eco2: 1250, aqi: 150, aqi_s: 0 },
+        timestamp: 1,
+      });
+
+      (async () => {
+        try {
+          const port = fakePort();
+          const legacy = new Device(port, 2);
+          await legacy.connect();
+          // One live frame a second, forever unanswered.
+          const stream = setInterval(() => legacy.link._handleLine(baseLine), 400);
+          const started = performance.now();
+          const sync = legacy.syncHistory(); // what the detail page does on open
+          await legacy.whenProbed();
+          clearInterval(stream);
+          const elapsed = performance.now() - started;
+          if (legacy.commandSupport !== "none") {
+            throw new Error(`verdict "${legacy.commandSupport}" after ${elapsed.toFixed(0)}ms`);
+          }
+          if (!legacy.legacyFirmware) throw new Error("legacyFirmware getter disagrees");
+          if (port.written >= 64) throw new Error(`${port.written} bytes sent, FIFO is 64`);
+          await sync;
+          if (legacy.isSyncing || legacy.syncError) {
+            throw new Error(`history sync ran anyway: "${legacy.syncError}"`);
+          }
+          const before = port.written;
+          let refused = "";
+          try {
+            await legacy.setBrightness(40);
+          } catch (err) {
+            refused = err.message;
+          }
+          if (port.written !== before) throw new Error("brightness was written to a deaf cube");
+          if (!refused.includes("February 2026")) throw new Error(`error "${refused}"`);
+
+          // The views hide the controls that cannot work and offer the update.
+          const reg = { devices: [legacy], supported: true, byId: () => legacy, addEventListener() {} };
+          let flashRequested = null;
+          const detail = new DetailView(reg, { onBack() {}, onFlash: (d) => (flashRequested = d) });
+          document.body.append(detail.el);
+          detail.setDevice(legacy);
+          detail.refresh();
+          const banner = detail.el.querySelector(".legacy-banner");
+          if (!banner || banner.style.display === "none") throw new Error("no update banner");
+          if (detail.briCard.style.display !== "none") throw new Error("brightness slider still shown");
+          banner.querySelector("button").click();
+          if (flashRequested !== legacy) throw new Error("banner button did not open the flasher");
+          const fwDt = [...detail.el.querySelectorAll(".advanced-grid dt")]
+            .find((n) => n.textContent === "Firmware");
+          const fwRow = fwDt.nextElementSibling.textContent;
+          if (!fwRow.includes("update needed")) throw new Error(`firmware row "${fwRow}"`);
+
+          const settings = new SettingsView(reg, { onBack() {}, onFlash() {} });
+          document.body.append(settings.el);
+          settings.refresh();
+          const labels = [...settings.el.querySelectorAll(".settings-row .label div")].map((n) => n.textContent);
+          if (!labels.includes("Firmware update needed")) throw new Error(`settings rows ${labels.join("|")}`);
+          if (labels.includes("Auto-dim at night")) throw new Error("settings still offer controls");
+
+          const home = new HomeView(reg, { onOpenDetail() {}, onOpenSettings() {}, onConnect() {} });
+          document.body.append(home.el);
+          home.refresh();
+          const note = home.el.querySelector(".legacy-note");
+          if (!note || note.style.display === "none") throw new Error("home card has no update note");
+          if (home.el.querySelector(".device-card .toggle")?.style.display !== "none") {
+            throw new Error("home card still offers the LED toggle");
+          }
+
+          // Once updated, the cube comes back on a new port and must be probed
+          // afresh rather than remembered as deaf.
+          legacy.rebind(fakePort());
+          if (legacy.legacyFirmware) throw new Error("verdict survived the rebind");
+
+          results.push(
+            `PASS talk-only firmware is detected and left alone :: ${port.written} bytes in ${elapsed.toFixed(0)}ms`,
+          );
+        } catch (err) {
+          results.push(`FAIL talk-only firmware is detected :: ${err.stack || err}`);
+        }
+      })();
+
+      // The customer's cube has usually already been written to by another
+      // app, so the FIFO is full before we start and the very first write
+      // hangs. That has to be caught quickly, not waited on forever.
+      (async () => {
+        try {
+          const port = fakePort({ writeBehaviour: "hang" });
+          const jammed = new Device(port, 3);
+          const started = performance.now();
+          await jammed.connect();
+          let stalledEvents = 0;
+          jammed.link.addEventListener("stalled", () => stalledEvents++);
+          await jammed.whenProbed();
+          const elapsed = performance.now() - started;
+          if (!jammed.link.writeStalled) throw new Error("write stall not flagged");
+          if (jammed.commandSupport !== "none") throw new Error(`verdict "${jammed.commandSupport}"`);
+          if (stalledEvents !== 1) throw new Error(`${stalledEvents} stalled events`);
+          if (elapsed > 3000) throw new Error(`took ${elapsed.toFixed(0)}ms`);
+          let refused = "";
+          try {
+            await jammed.link.write("{}");
+          } catch (err) {
+            refused = err.message;
+          }
+          if (!refused) throw new Error("a later write was attempted on a stalled link");
+          // Closing for the flasher must not wait on the wedged write.
+          const closeStart = performance.now();
+          await jammed.holdForFlash();
+          if (performance.now() - closeStart > 5000) throw new Error("close hung");
+          results.push(`PASS a jammed USB FIFO is caught by the write watchdog :: ${elapsed.toFixed(0)}ms`);
+        } catch (err) {
+          results.push(`FAIL a jammed USB FIFO is caught :: ${err.stack || err}`);
+        }
+      })();
+
       setTimeout(() => {
         document.querySelector("#results").textContent = results.join("\n");
-      }, 2500);
+      }, 6500);
     </script>
   </body>
 </html>

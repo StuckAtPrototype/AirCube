@@ -18,6 +18,7 @@ import {
   downloadFile,
 } from "../ui.js";
 import { prefs } from "../prefs.js";
+import { LEGACY_FIRMWARE_MESSAGE } from "../protocol.js";
 import { Sparkline, AirGauge, HistoryChart } from "../charts.js";
 import {
   readingQuality,
@@ -111,6 +112,24 @@ export class DetailView {
       h("div.hero-text", this.heroTitle, this.heroAdvice, this.heroPill),
       this.gauge.el,
     );
+
+    // --- legacy firmware ------------------------------------------------
+    // Shown once the cube has proven it streams readings but ignores every
+    // command: firmware from before February 2026. Everything below that
+    // needs a reply from the cube is hidden while this is up.
+    this.legacyCard = h(
+      "div.card.notice.legacy-banner",
+      h("div.notice-text",
+        h("div.notice-title", { text: "Firmware update needed" }),
+        h("div.muted", { text: LEGACY_FIRMWARE_MESSAGE }),
+      ),
+      h("button.btn.primary", {
+        type: "button",
+        text: "Update firmware",
+        onclick: () => this.device && this.onFlash(this.device),
+      }),
+    );
+    this.legacyCard.style.display = "none";
 
     // --- tiles ----------------------------------------------------------
     this.tiles = {
@@ -256,6 +275,7 @@ export class DetailView {
         "div.detail-body",
         h(
           "div.detail-rail",
+          this.legacyCard,
           this.hero,
           h("div.tiles", this.tiles.co2.el, this.tiles.voc.el, this.tiles.hum.el, this.tiles.temp.el),
           this.briCard,
@@ -271,9 +291,31 @@ export class DetailView {
     this.metric = HISTORY_METRICS[0];
     this.metricPicker.select(this.metric.key);
     this._historyVersion = -1;
+    this._autoSyncedConnection = -1;
     this.refresh();
-    // Entering detail kicks off a sync, matching show_detail() in the tray.
-    if (device.isConnected && !device.isSyncing && !device.slots.length) {
+  }
+
+  /**
+   * Entering detail kicks off a sync, matching show_detail() in the tray.
+   *
+   * It runs once per connection rather than once per visit, so a cube that
+   * has just been updated from talk-only firmware gets its first sync as soon
+   * as the new firmware answers the probe, without leaving and coming back.
+   * Device.syncHistory() itself waits for the probe and stays quiet on a
+   * legacy cube.
+   */
+  _autoSync() {
+    const device = this.device;
+    if (
+      device.isConnected &&
+      !device.legacyFirmware &&
+      !device.isSyncing &&
+      !device.slots.length &&
+      !device.lastSyncedAt &&
+      !device.syncError &&
+      this._autoSyncedConnection !== device.connectionId
+    ) {
+      this._autoSyncedConnection = device.connectionId;
       device.syncHistory().catch(() => {});
     }
   }
@@ -281,12 +323,26 @@ export class DetailView {
   // ------------------------------------------------------------------ actions
 
   _syncNow() {
+    if (this.device?.legacyFirmware) {
+      toast(LEGACY_FIRMWARE_MESSAGE, "err");
+      return;
+    }
     this.device?.syncHistory().catch((err) => toast(err.message, "err"));
   }
 
   _openMenu() {
     const device = this.device;
     if (!device) return;
+    if (device.legacyFirmware) {
+      // Only what works without the cube hearing us.
+      openMenu(this.menuBtn, [
+        { label: "Update firmware", onSelect: () => this.onFlash(device) },
+        { label: "Rename", onSelect: () => this._rename() },
+        "-",
+        { label: "Disconnect", onSelect: () => this._disconnect() },
+      ]);
+      return;
+    }
     openMenu(this.menuBtn, [
       { label: "Sync now", onSelect: () => this._syncNow() },
       { label: "Export CSV", onSelect: () => this._exportCsv() },
@@ -386,6 +442,7 @@ export class DetailView {
 
   refresh() {
     if (!this.device) return;
+    this._autoSync();
     this.refreshLive();
     this.refreshSync();
     // Historical ranges redraw only after a sync. The live range updates for
@@ -407,6 +464,10 @@ export class DetailView {
     this.connLabel.textContent = device.isConnected
       ? `${online ? "Connected" : "Waiting for data"} · ${updatedAgo(device.lastUpdated)}`
       : "Disconnected";
+
+    const legacy = device.legacyFirmware;
+    this.legacyCard.style.display = legacy ? "" : "none";
+    this.briCard.style.display = legacy ? "none" : "";
 
     if (!reading) {
       this.hero.className = "card hero q-none";
@@ -456,7 +517,9 @@ export class DetailView {
     // this browser flashed the cube.
     this.advRows.fw.textContent = device.fwVersion
       ? `v${device.fwVersion}`
-      : "not reported by this firmware";
+      : legacy
+        ? "before February 2026 (update needed)"
+        : "not reported by this firmware";
     this.advRows.transport.textContent = "USB (Web Serial)";
 
     if (device.ledPercent != null) {
@@ -557,7 +620,9 @@ export class DetailView {
 
   _refreshSyncStatusText() {
     const device = this.device;
-    if (device.isSyncing) {
+    if (device.legacyFirmware) {
+      this.syncStatus.textContent = "History needs a firmware update";
+    } else if (device.isSyncing) {
       const { current, total } = device.syncProgress;
       this.syncStatus.textContent = total
         ? `Syncing ${current} of ${total} entries...`
@@ -587,7 +652,7 @@ export class DetailView {
       // while we are still fetching it.
       this.chartEmpty.style.display = "none";
     }
-    this.syncBtn.disabled = device.isSyncing || !device.isConnected;
+    this.syncBtn.disabled = device.isSyncing || !device.isConnected || device.legacyFirmware;
   }
 
   _onScrub(point) {

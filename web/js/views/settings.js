@@ -8,6 +8,7 @@
 
 import { h, clear, pillPicker, toggle, toast, confirmDialog } from "../ui.js";
 import { prefs, applyAppearance } from "../prefs.js";
+import { LEGACY_FIRMWARE_MESSAGE } from "../protocol.js";
 
 const APP_VERSION = "1.0.0";
 
@@ -152,7 +153,7 @@ export class SettingsView {
     // Rebuilding on every tick would steal focus from a field being edited, so
     // only redraw when the cubes or their settings actually changed.
     const signature = JSON.stringify(
-      devices.map((d) => [d.id, d.name, d.isPro, d.config]),
+      devices.map((d) => [d.id, d.name, d.isPro, d.config, d.commandSupport]),
     );
     if (signature === this._signature) return;
     this._signature = signature;
@@ -167,6 +168,27 @@ export class SettingsView {
   }
 
   _deviceCard(device) {
+    if (device.legacyFirmware) {
+      // Nothing on this card can reach a cube that ignores commands.
+      return h(
+        "div",
+        h("h2.section-label", { text: device.name }),
+        h(
+          "div.card.settings-group",
+          row(
+            "Firmware update needed",
+            h("button.btn.primary", {
+              type: "button",
+              text: "Update firmware",
+              onclick: () => this.onFlash(device),
+            }),
+            LEGACY_FIRMWARE_MESSAGE,
+          ),
+        ),
+        h("div", { style: { height: "14px" } }),
+      );
+    }
+
     const config = device.config;
     const autoDim = config?.autoDim ?? {
       enabled: false,

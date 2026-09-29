@@ -837,6 +837,29 @@ button:focus-visible {
   border-color: rgb(var(--q-crit-rgb) / 0.3);
 }
 
+/* In-page call to action, e.g. the firmware-update card on a legacy cube. */
+.card.notice {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgb(var(--q-warn-rgb) / 0.1);
+  border: 1px solid rgb(var(--q-warn-rgb) / 0.35);
+}
+.card.notice .notice-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.card.notice .notice-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.card.notice .btn {
+  flex-shrink: 0;
+}
+
 /* ---------------------------------------------------------------- charts */
 
 .uplot,

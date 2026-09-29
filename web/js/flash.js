@@ -71,7 +71,20 @@ export async function flashDevice({
 
   try {
     log("Connecting to the bootloader...");
-    const chip = await loader.main();
+    let chip;
+    try {
+      chip = await loader.main();
+    } catch (err) {
+      // The data link could not give the port back: a write to a cube on
+      // pre-February-2026 firmware can hang for good once its USB FIFO is
+      // full, and the browser may keep the port open until that settles.
+      if (err?.name === "InvalidStateError" || /already open/i.test(err?.message || "")) {
+        throw new Error(
+          "The browser could not release the serial port. Unplug the AirCube, plug it back in, and flash again.",
+        );
+      }
+      throw err;
+    }
     log(`Detected ${chip}`, "ok");
 
     if (!EXPECTED_CHIP.test(chip) && !ignoreChipMismatch) {

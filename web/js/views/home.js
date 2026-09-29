@@ -55,6 +55,10 @@ class DeviceCard {
         .setBrightness(on ? LED_DEFAULT_PERCENT : 0)
         .catch((err) => toast(err.message, "err"));
     });
+    this.ledLabel = h("span.faint", { text: "LED" });
+    // Replaces the LED toggle on a cube whose firmware cannot hear commands.
+    this.legacyNote = h("span.faint.legacy-note", { text: "Firmware update needed" });
+    this.legacyNote.style.display = "none";
 
     this.el = h(
       "div.card.device-card",
@@ -95,7 +99,8 @@ class DeviceCard {
         "div.row",
         this.updated,
         h("div.spacer"),
-        h("span.faint", { text: "LED" }),
+        this.legacyNote,
+        this.ledLabel,
         this.ledToggle,
       ),
     );
@@ -154,6 +159,10 @@ class DeviceCard {
     if (device.ledPercent != null) {
       this.ledToggle.setAttribute("aria-checked", String(device.ledPercent > 0));
     }
+    const legacy = device.legacyFirmware;
+    this.legacyNote.style.display = legacy ? "" : "none";
+    this.ledLabel.style.display = legacy ? "none" : "";
+    this.ledToggle.style.display = legacy ? "none" : "";
 
     this.refreshSparkline();
     this.refreshSync();

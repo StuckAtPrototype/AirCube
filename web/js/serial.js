@@ -14,11 +14,31 @@ import * as proto from "./protocol.js";
 const DEFAULT_TIMEOUT_MS = 3000;
 const MAX_LINE_BUFFER = 64 * 1024;
 
+/**
+ * How long a single write may take before the link is declared stalled.
+ *
+ * The ESP32-H2's USB Serial/JTAG receive FIFO holds 64 bytes. Firmware from
+ * before February 2026 never reads it (it polled UART0 instead), so once the
+ * host has pushed 64 bytes the device NAKs every further packet and the
+ * browser's write promise never settles. A healthy cube drains a 30-byte
+ * command in well under a millisecond, so anything approaching a second means
+ * nobody is listening on the other end.
+ */
+export const WRITE_STALL_MS = 1500;
+const CLOSE_TIMEOUT_MS = 4000;
+
+export const STALLED_MESSAGE =
+  "The AirCube is not accepting data over USB. Its firmware is too old to take " +
+  "commands on this port; update the firmware to fix this. If flashing fails, " +
+  "unplug the cube, plug it back in and try again.";
+
 export class SerialLink extends EventTarget {
   constructor(port) {
     super();
     this.port = port;
     this.isOpen = false;
+    /** Set once a write has hung; all later writes are refused immediately. */
+    this.writeStalled = false;
     this._reader = null;
     this._writer = null;
     this._pending = [];
@@ -40,6 +60,7 @@ export class SerialLink extends EventTarget {
       /* platform or polyfill without signal control */
     }
     this.isOpen = true;
+    this.writeStalled = false;
     this._buffer = "";
     this._readLoop = this._read();
   }
@@ -83,10 +104,19 @@ export class SerialLink extends EventTarget {
     }
     this._readLoop = null;
 
+    // A write that never completed (see WRITE_STALL_MS) is still queued in the
+    // port's writable stream. Chrome aborts it when the port closes, but do
+    // not bet the flasher on that: give up after a while so the caller can
+    // tell the user to replug rather than sit on a spinner forever.
     try {
-      await this.port.close();
+      await Promise.race([
+        this.port.close(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("port.close() timed out")), CLOSE_TIMEOUT_MS),
+        ),
+      ]);
     } catch {
-      /* device may have been unplugged */
+      /* device may have been unplugged, or the close is wedged */
     }
     this.dispatchEvent(new CustomEvent("closed"));
   }
@@ -154,8 +184,27 @@ export class SerialLink extends EventTarget {
 
   async write(text) {
     if (!this.isOpen || !this.port.writable) throw new Error("Serial link is closed");
+    if (this.writeStalled) throw new Error(STALLED_MESSAGE);
     if (!this._writer) this._writer = this.port.writable.getWriter();
-    await this._writer.write(new TextEncoder().encode(text + "\n"));
+
+    const pending = this._writer.write(new TextEncoder().encode(text + "\n"));
+    let timer;
+    const stall = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(STALLED_MESSAGE)), WRITE_STALL_MS);
+    });
+    try {
+      await Promise.race([pending, stall]);
+    } catch (err) {
+      if (err.message === STALLED_MESSAGE && this.isOpen) {
+        this.writeStalled = true;
+        // The hung write settles (or rejects) only when the port closes.
+        pending.catch(() => {});
+        this.dispatchEvent(new CustomEvent("stalled"));
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -169,7 +218,7 @@ export class SerialLink extends EventTarget {
         return await this._sendOnce(command, matcher, timeoutMs);
       } catch (err) {
         lastError = err;
-        if (!this.isOpen) throw err;
+        if (!this.isOpen || this.writeStalled) throw err;
       }
     }
     throw lastError;
