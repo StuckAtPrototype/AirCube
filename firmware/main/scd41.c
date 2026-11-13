@@ -107,7 +107,9 @@ static const char *TAG = "scd41";
 // Software-only temperature trim (deg C), added to the reported temperature
 // after the sensor's own compensation. Humidity is NOT touched. Calibrated
 // 2026-11-13 against a free-air SEN66 over 10 h: with the previous +1.36 C
-// trim the Pro read +1.52 C high (sd 0.10), so 1.36 - 1.52 = -0.16 C.
+// trim the Pro read +1.52 C high (sd 0.10), so 1.36 - 1.52 = -0.16 C. Checked
+// the same day against three physical thermometers (23.6/23.6/23.8 C): the Pro
+// at -0.16 matched their mean to within 0.01 C, so no further change.
 #define SCD41_TEMPERATURE_TRIM_C    -0.16f
 
 #define SCD41_MAX_WORDS 8
