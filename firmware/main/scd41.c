@@ -105,10 +105,10 @@ static const char *TAG = "scd41";
 #define SCD41_TEMPERATURE_OFFSET_C  4.0f
 
 // Software-only temperature trim (deg C), added to the reported temperature
-// after the sensor's own compensation. Humidity is NOT touched. Calibrated in
-// low-power periodic mode: the AirCube read 76.5 F while the reference read
-// 78.0 F, requiring an additional +0.83 C over the previous +0.53 C trim.
-#define SCD41_TEMPERATURE_TRIM_C    1.36f
+// after the sensor's own compensation. Humidity is NOT touched. Calibrated
+// 2026-11-13 against a free-air SEN66 over 10 h: with the previous +1.36 C
+// trim the Pro read +1.52 C high (sd 0.10), so 1.36 - 1.52 = -0.16 C.
+#define SCD41_TEMPERATURE_TRIM_C    -0.16f
 
 #define SCD41_MAX_WORDS 8
 

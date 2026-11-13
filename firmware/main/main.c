@@ -402,8 +402,10 @@ void sensor_task(void *pvParameters)
             temp_c = ens210_get_temperature(1); // 1 = Celsius
             humidity = ens210_get_humidity();
 
-            // ENS210 reads ~2 C high in this enclosure; correct it.
-            temp_c -= 2;
+            // ENS210 self-heating in this enclosure. Calibrated 2026-11-13 against a
+            // free-air SEN66 over 10 h: with the previous -2.0 C the cube still read
+            // +0.86 C high (sd 0.14), so -2.86 C.
+            temp_c -= 2.86f;
 
             // Write ENS210 data to ENS161 for environmental compensation
             if (temp_valid && hum_valid) {
