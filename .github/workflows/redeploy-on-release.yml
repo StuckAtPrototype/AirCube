@@ -1,0 +1,25 @@
+name: Redeploy web on release
+
+# Publishing a release checks out the tag. Pages refuses that ref
+# ("Tag is not allowed to deploy to github-pages due to environment
+# protection rules"), so the firmware never reaches the web flasher.
+# Start the Pages workflow on master, which is allowed to deploy and
+# picks up the new release asset while building the manifest.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy AirCube Web from master
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run pages.yml --ref master

@@ -4,6 +4,10 @@ name: Deploy AirCube Web
 # alongside it so the browser can fetch them same-origin.
 #
 # One-time setup: repository Settings -> Pages -> Source: GitHub Actions.
+#
+# A published release must not deploy from its tag. The github-pages
+# environment only accepts master, so redeploy-on-release.yml starts this
+# workflow on master instead.
 
 on:
   push:
@@ -12,8 +16,6 @@ on:
       - "web/**"
       - "scripts/build_web_manifest.py"
       - ".github/workflows/pages.yml"
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
