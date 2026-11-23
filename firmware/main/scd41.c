@@ -96,21 +96,16 @@ static const char *TAG = "scd41";
 #define SCD41_RETRY_BASE_US    (1ULL * 1000000ULL)
 #define SCD41_RETRY_MAX_SHIFT  5
 
-// On-chip temperature offset (deg C). The SCD4x subtracts this from the raw
-// reading and ALSO uses it to compensate the reported humidity. We deliberately
-// keep it at the 4.0 C factory default because at that value the SCD41 humidity
-// matches reality (the ENS210 reads ~12 %RH too low). Changing this would shift
-// humidity as a side effect, so temperature is corrected separately in software
-// via SCD41_TEMPERATURE_TRIM_C below.
-#define SCD41_TEMPERATURE_OFFSET_C  4.0f
+// On-chip temperature offset (deg C). The SCD41 subtracts this from the raw
+// temperature and uses the same value when it derives humidity. This is the
+// only temperature correction. 4.40 C splits the Pro's daily swing against
+// the base: about 3.9 C overnight and about 4.8 C in the afternoon.
+#define SCD41_TEMPERATURE_OFFSET_C  4.40f
 
-// Software-only temperature trim (deg C), added to the reported temperature
-// after the sensor's own compensation. Humidity is NOT touched. Calibrated
-// 2026-11-13 against a free-air SEN66 over 10 h: with the previous +1.36 C
-// trim the Pro read +1.52 C high (sd 0.10), so 1.36 - 1.52 = -0.16 C. Checked
-// the same day against three physical thermometers (23.6/23.6/23.8 C): the Pro
-// at -0.16 matched their mean to within 0.01 C, so no further change.
-#define SCD41_TEMPERATURE_TRIM_C    -0.16f
+uint16_t scd41_temperature_offset_cdeg(void)
+{
+    return (uint16_t)(SCD41_TEMPERATURE_OFFSET_C * 100.0f + 0.5f);
+}
 
 #define SCD41_MAX_WORDS 8
 
@@ -471,13 +466,11 @@ static void scd41_check_stuck(uint16_t t_word, uint16_t rh_word)
 }
 
 // Convert raw temperature/humidity words to engineering units and accept them
-// only if the result is physically possible.
-// Temperature gets a software trim (see SCD41_TEMPERATURE_TRIM_C); humidity is
-// passed through exactly as the sensor reports it.
+// only if the result is physically possible. The SCD41 has already applied
+// SCD41_TEMPERATURE_OFFSET_C; nothing else is added here.
 static bool scd41_store_temp_rh(uint16_t t_word, uint16_t rh_word)
 {
-    float temperature = -45.0f + 175.0f * ((float)t_word / 65535.0f)
-                        + SCD41_TEMPERATURE_TRIM_C;
+    float temperature = -45.0f + 175.0f * ((float)t_word / 65535.0f);
     float humidity    = 100.0f * ((float)rh_word / 65535.0f);
 
     if (temperature < SCD41_TEMP_MIN_C || temperature > SCD41_TEMP_MAX_C ||

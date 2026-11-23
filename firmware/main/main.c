@@ -635,8 +635,18 @@ void app_main(void)
     ESP_LOGI(TAG, "ENS16X initialized");
 
     if (aircube_model_is_pro()) {
-        scd41_init(restart_state_should_resume_scd41());
+        // A plain reset leaves the SCD41 powered and measuring, so the previous
+        // on-chip offset would survive a firmware change. Resume only when the
+        // offset already written matches this build; otherwise stop, write it,
+        // and start again.
+        uint16_t offset_cdeg = scd41_temperature_offset_cdeg();
+        bool resume = restart_state_should_resume_scd41() &&
+                      restart_state_get_scd41_offset_cdeg() == offset_cdeg;
+        scd41_init(resume);
         restart_state_set_scd41_running(scd41_is_present());
+        if (scd41_is_present()) {
+            restart_state_set_scd41_offset_cdeg(offset_cdeg);
+        }
         ESP_LOGI(TAG, "SCD41 %s", scd41_is_present() ? "present" : "not present");
         vcnl4040_init();
         ESP_LOGI(TAG, "VCNL4040 %s", vcnl4040_is_present() ? "present" : "not present");

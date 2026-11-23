@@ -181,7 +181,7 @@ Select your serial port, click **Connect**, and you'll see live data.
 
 ## Firmware Updates
 
-The current firmware is **v2.0.7**. It keeps the cube responsive when plugged into a charger or closed port, and on Pro units it disables SCD41 automatic self-calibration (replaced by a 425 ppm fresh-air calibration) and detects a CO2 channel that has stopped reporting. See the [v2.0.7 release notes](releases/RELEASE_NOTES_v2.0.7.md).
+The current firmware is **v2.0.9**. It recalibrates the AirCube Pro temperature, keeps the cube responsive when plugged into a charger or closed port, and on Pro units it disables SCD41 automatic self-calibration (replaced by a 425 ppm fresh-air calibration) and detects a CO2 channel that has stopped reporting. See the [v2.0.9 release notes](releases/RELEASE_NOTES_v2.0.9.md).
 
 **[Flash it now with AirCube Web](https://stuckatprototype.github.io/AirCube/)** or read the **[Firmware Update Guide](FIRMWARE_UPDATE.md)** for step-by-step instructions.
 

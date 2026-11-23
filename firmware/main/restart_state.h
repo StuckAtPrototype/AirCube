@@ -27,4 +27,9 @@ bool restart_state_get_visual(restart_visual_state_t *state);
 void restart_state_set_scd41_running(bool running);
 bool restart_state_should_resume_scd41(void);
 
+// Offset last written to the SCD41, in centi-degrees. Zero on a cold boot.
+// A warm resume is only valid when this still matches the firmware offset.
+uint16_t restart_state_get_scd41_offset_cdeg(void);
+void restart_state_set_scd41_offset_cdeg(uint16_t offset_cdeg);
+
 #endif // AIRCUBE_RESTART_STATE_H

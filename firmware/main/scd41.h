@@ -23,6 +23,9 @@
 // it will simply mark the sensor as not present.
 void scd41_init(bool resume_periodic);
 
+// On-chip temperature offset this firmware writes, in centi-degrees.
+uint16_t scd41_temperature_offset_cdeg(void);
+
 // Returns true if the SCD41 was detected during scd41_init().
 bool scd41_is_present(void);
 

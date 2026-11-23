@@ -19,7 +19,7 @@ typedef struct {
     restart_visual_state_t visual;
     bool visual_valid;
     bool scd41_running;
-    uint8_t reserved[2];
+    uint16_t scd41_offset_cdeg;
     uint32_t checksum;
 } retained_state_t;
 
@@ -107,6 +107,17 @@ bool restart_state_get_visual(restart_visual_state_t *state)
 void restart_state_set_scd41_running(bool running)
 {
     s_retained.scd41_running = running;
+    state_commit();
+}
+
+uint16_t restart_state_get_scd41_offset_cdeg(void)
+{
+    return s_warm_boot ? s_retained.scd41_offset_cdeg : 0;
+}
+
+void restart_state_set_scd41_offset_cdeg(uint16_t offset_cdeg)
+{
+    s_retained.scd41_offset_cdeg = offset_cdeg;
     state_commit();
 }
 
