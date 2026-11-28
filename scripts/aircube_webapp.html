@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<!--
+  AirCube Web Serial Monitor
+  Copyright 2026 The AirCube Authors
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AirCube - Air Quality Monitor (Web Serial)</title>
+<style>
+  :root { --green:#2e7d32; --yellow:#f9a825; --orange:#ef6c00; --red:#c62828; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, "Segoe UI", sans-serif; margin: 0; background: #f5f5f5; color: #222; }
+  header { background: #263238; color: #fff; padding: 0.7rem 1rem; display: flex;
+           align-items: center; gap: 1rem; flex-wrap: wrap; }
+  header h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
+  .grow { flex: 1; }
+  button { font-size: 0.9rem; padding: 0.45rem 0.9rem; border: none; border-radius: 4px;
+           cursor: pointer; background: #455a64; color: #fff; }
+  button:hover { background: #37474f; }
+  button.primary { background: #4CAF50; }
+  button.primary:hover { background: #45a049; }
+  button.danger { background: #f44336; }
+  button.danger:hover { background: #da190b; }
+  button:disabled { background: #b0bec5; cursor: default; }
+  .status { font-weight: 600; }
+  main { padding: 1rem; max-width: 1100px; margin: 0 auto; }
+  .panel { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 1rem;
+           margin-bottom: 1rem; }
+  .panel h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em;
+              color: #607d8b; margin: 0 0 0.7rem; }
+  .cards { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .card { flex: 1; min-width: 120px; text-align: center; background: #fafafa;
+          border: 1px solid #eee; border-radius: 6px; padding: 0.8rem 0.5rem; }
+  .card .title { font-size: 0.75rem; color: #666; }
+  .card .title[data-tip] { cursor: help; border-bottom: 1px dotted #aaa; }
+  #tip { position: fixed; z-index: 1000; max-width: 280px; background: #333; color: #fff;
+         padding: 0.5rem 0.6rem; border-radius: 5px; font-size: 0.78rem; line-height: 1.35;
+         white-space: normal; box-shadow: 0 2px 10px rgba(0,0,0,.35); display: none;
+         pointer-events: none; }
+  .card .val { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+  .card .unit { font-size: 0.8rem; color: #888; }
+  canvas.chart { width: 100%; height: 170px; display: block; }
+  .row { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin: 0.4rem 0; }
+  label { font-size: 0.85rem; }
+  input[type=number] { width: 90px; padding: 0.3rem; border: 1px solid #ccc; border-radius: 4px; }
+  input[type=range] { vertical-align: middle; }
+  #log { white-space: pre-wrap; background: #111; color: #9ccc65; padding: 0.7rem;
+         border-radius: 6px; height: 160px; overflow-y: auto; font-family: ui-monospace, monospace;
+         font-size: 0.78rem; }
+  .muted { color: #888; font-size: 0.8rem; }
+  details summary { cursor: pointer; font-size: 0.85rem; color: #607d8b; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AirCube</h1>
+  <button id="connectBtn" class="primary">Connect</button>
+  <span id="connStatus" class="status" style="color:#ff8a80">Disconnected</span>
+  <span class="grow"></span>
+  <button id="unitBtn">Units: C</button>
+  <span id="sampleStatus" class="muted">Samples: 0</span>
+  <label class="muted">History
+    <input type="number" id="maxPoints" value="300" min="50" max="2000" step="50" style="width:70px">
+    pts</label>
+</header>
+
+<div id="tip"></div>
+<main>
+  <div class="panel">
+    <div class="cards">
+      <div class="card"><div class="title" data-tip="Ambient air temperature measured by the ENS210 sensor. Toggle the Units button to switch between Celsius and Fahrenheit.">Temperature</div><div class="val" id="cTemp">--.-</div><div class="unit" id="cTempUnit">&deg;C</div></div>
+      <div class="card"><div class="title" data-tip="Relative humidity (%) from the ENS210 sensor: how much water vapor is in the air versus the maximum it could hold at this temperature. Comfortable indoor range is roughly 30-60%.">Humidity</div><div class="val" id="cHum">--.-</div><div class="unit">%</div></div>
+      <div class="card"><div class="title" data-tip="Air Quality Index (0-500): TVOC mapped to a fixed indoor-air scale. Lower is better -- green (good) up to ~50, yellow up to ~100, orange up to ~200, red above. Derived from eTVOC; eCO2 does not affect it.">Air Quality Index</div><div class="val" id="cAqi">---</div><div class="unit">AQI</div></div>
+      <div class="card"><div class="title" data-tip="Equivalent CO2: an estimated CO2 concentration (ppm) derived by the sensor from VOC readings -- not a direct CO2 measurement. Rises in poorly ventilated or crowded spaces. ~400 ppm is fresh outdoor air; above ~1000 ppm suggests ventilation is needed.">eCO2</div><div class="val" id="cEco2">----</div><div class="unit">ppm</div></div>
+      <div class="card"><div class="title" data-tip="Equivalent Total Volatile Organic Compounds: estimated total airborne VOC concentration (ppb) from sources like cleaning products, paints, adhesives, furnishings, cooking, and people. Higher values mean more VOCs; ventilate to reduce.">eTVOC</div><div class="val" id="cTvoc">----</div><div class="unit">ppb</div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Sensor history</h2>
+    <canvas class="chart" id="chartTH"></canvas>
+    <canvas class="chart" id="chartAQI"></canvas>
+    <canvas class="chart" id="chartGas"></canvas>
+  </div>
+
+  <div class="panel">
+    <h2>CSV logging</h2>
+    <div class="row">
+      <button id="logFileBtn">Start file log...</button>
+      <button id="downloadBtn">Download CSV (session)</button>
+      <span id="csvStatus" class="muted"></span>
+    </div>
+    <div class="muted">File log streams each sample to a chosen file (committed when you Stop).
+      Download exports everything captured this session.</div>
+  </div>
+
+  <div class="panel">
+    <h2>Device controls</h2>
+    <div class="row">
+      <button id="getConfigBtn">Get config</button>
+      <span id="cfgStatus" class="muted"></span>
+    </div>
+    <div class="row">
+      <label>LED intensity</label>
+      <input type="range" id="intensity" min="0" max="1" step="0.01" value="0.5">
+      <span id="intensityVal" class="muted">0.50</span>
+      <button id="setIntensityBtn">Set</button>
+    </div>
+    <div class="row">
+      <label>Readout period</label>
+      <input type="number" id="period" min="100" max="10000" step="100" value="1000"> ms
+      <button id="setPeriodBtn">Set</button>
+    </div>
+    <div class="row">
+      <button id="historyBtn">Request history dump (h)</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <details open>
+      <summary>Serial log</summary>
+      <div id="log" style="margin-top:0.5rem"></div>
+    </details>
+  </div>
+</main>
+
+<script>
+"use strict";
+const VID = 0x303A;
+const CSV_HEADER = ["timestamp","ens210_status","temperature_c","temperature_f",
+  "humidity","ens16x_status","etvoc","eco2","aqi"];
+
+// ---- state ----
+let port = null, reading = false, rxBuf = "";
+let activeReader = null, readDone = null;
+let t0 = null, sampleCount = 0;
+let buffer = [];            // chart window: {t,temp,hum,aqi,eco2,etvoc}
+let csvRows = [];           // full session rows for download
+let maxPoints = 300;
+let csvWritable = null;     // File System Access writable stream
+let tempUnit = "C";         // "C" or "F" for display
+let lastVals = null;        // last sample, for redrawing cards on unit toggle
+
+const $ = id => document.getElementById(id);
+const logEl = $("log");
+function log(m) { logEl.textContent += m + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+
+// ---- connection ----
+$("connectBtn").addEventListener("click", () => port ? disconnect() : connect());
+
+navigator.serial?.addEventListener("disconnect", () => {
+  if (port) { log("*** device disconnected ***"); disconnect(); }
+});
+
+async function connect() {
+  if (!("serial" in navigator)) {
+    alert("Web Serial unavailable. Use Chrome over https or http://localhost.");
+    return;
+  }
+  try { port = await navigator.serial.requestPort({ filters: [{ usbVendorId: VID }] }); }
+  catch (e) { log("no port selected: " + e); port = null; return; }
+  try { await port.open({ baudRate: 115200 }); }
+  catch (e) { log("open failed: " + e); port = null; return; }
+
+  // The handshake the ESP32-H2 USB Serial/JTAG needs: DTR low, RTS high.
+  try { await port.setSignals({ dataTerminalReady: false, requestToSend: true }); }
+  catch (e) { log("setSignals failed: " + e); }
+
+  t0 = null; sampleCount = 0; buffer = []; csvRows = []; rxBuf = "";
+  setConnectedUI(true);
+  reading = true;
+  log("connected (DTR=0 RTS=1)");
+  readDone = readLoop();
+}
+
+async function disconnect() {
+  reading = false;
+  // Cancel the reader so read() resolves and the loop releases its lock,
+  // then wait for the loop to finish before closing the port.
+  if (activeReader) { try { await activeReader.cancel(); } catch (e) {} }
+  if (readDone) { try { await readDone; } catch (e) {} readDone = null; }
+  try { await stopFileLog(); } catch (e) {}
+  if (port) {
+    try { await port.close(); } catch (e) { log("close: " + e); }
+    port = null;
+  }
+  setConnectedUI(false);
+  log("disconnected");
+}
+
+function setConnectedUI(on) {
+  $("connectBtn").textContent = on ? "Disconnect" : "Connect";
+  $("connectBtn").className = on ? "danger" : "primary";
+  $("connStatus").textContent = on ? "Connected" : "Disconnected";
+  $("connStatus").style.color = on ? "#b9f6ca" : "#ff8a80";
+}
+
+async function readLoop() {
+  const dec = new TextDecoder();
+  try { activeReader = port.readable.getReader(); } catch (e) { log("getReader: " + e); return; }
+  try {
+    while (reading) {
+      const { value, done } = await activeReader.read();
+      if (done) break;
+      if (value && value.length) {
+        rxBuf += dec.decode(value);
+        let nl;
+        while ((nl = rxBuf.indexOf("\n")) >= 0) {
+          const line = rxBuf.slice(0, nl).trim();
+          rxBuf = rxBuf.slice(nl + 1);
+          if (line) handleLine(line);
+        }
+      }
+    }
+  } catch (e) { if (reading) log("read error: " + e); }
+  finally { try { activeReader.releaseLock(); } catch (e) {} activeReader = null; }
+}
+
+// ---- writing commands ----
+async function sendCommand(str) {
+  if (!port || !port.writable) { log("not connected"); return; }
+  const writer = port.writable.getWriter();
+  try { await writer.write(new TextEncoder().encode(str + "\n")); log("TX: " + str); }
+  catch (e) { log("write error: " + e); }
+  finally { writer.releaseLock(); }
+}
+
+// ---- line handling ----
+function handleLine(line) {
+  let j = null;
+  try { j = JSON.parse(line); } catch (e) {}
+  if (j && j.ens210 && j.ens16x) { onSensor(j); return; }
+  if (j && j.config) {
+    $("cfgStatus").textContent = `intensity ${j.config.intensity}, period ${j.config.readout_period} ms`;
+    if (typeof j.config.intensity === "number") {
+      $("intensity").value = j.config.intensity;
+      $("intensityVal").textContent = (+j.config.intensity).toFixed(2);
+    }
+    if (typeof j.config.readout_period === "number") $("period").value = j.config.readout_period;
+    log("RX config: " + line);
+    return;
+  }
+  // status responses, history info, history CSV dump, or ESP_LOG lines
+  log("RX: " + line);
+}
+
+function onSensor(j) {
+  const ts = Number(j.timestamp);
+  if (!Number.isFinite(ts)) return;
+  if (t0 === null) t0 = ts;
+  const tRel = ts > 1000 ? (ts - t0) / 1000 : (ts - t0);   // firmware sends ms
+
+  const tempC = num(j.ens210.temperature_c);
+  let   tempF = num(j.ens210.temperature_f);
+  const hum   = num(j.ens210.humidity);
+  const aqi   = num(j.ens16x.aqi);
+  const eco2  = num(j.ens16x.eco2);
+  const etvoc = num(j.ens16x.etvoc);
+  if (tempC === null || hum === null || aqi === null) return;
+  if (tempF === null) tempF = tempC * 9 / 5 + 32;   // fallback if firmware omits it
+
+  buffer.push({ t: tRel, temp: tempC, tempF, hum, aqi, eco2: eco2 ?? NaN, etvoc: etvoc ?? NaN });
+  if (buffer.length > maxPoints) buffer.splice(0, buffer.length - maxPoints);
+
+  sampleCount++;
+  $("sampleStatus").textContent = "Samples: " + sampleCount;
+  lastVals = { tempC, tempF, hum, aqi, eco2, etvoc };
+  updateCards();
+
+  const row = [j.timestamp, j.ens210.status, j.ens210.temperature_c, j.ens210.temperature_f,
+    j.ens210.humidity, j.ens16x.status, j.ens16x.etvoc, j.ens16x.eco2, j.ens16x.aqi];
+  csvRows.push(row);
+  if (csvWritable) csvWritable.write(row.join(",") + "\n").catch(e => log("csv write: " + e));
+}
+
+const num = v => (v === null || v === undefined || isNaN(v)) ? null : Number(v);
+
+function updateCards() {
+  if (!lastVals) return;
+  const { tempC, tempF, hum, aqi, eco2, etvoc } = lastVals;
+  $("cTemp").textContent = (tempUnit === "F" ? tempF : tempC).toFixed(1);
+  $("cTempUnit").innerHTML = tempUnit === "F" ? "&deg;F" : "&deg;C";
+  $("cHum").textContent  = hum.toFixed(1);
+  const aqiEl = $("cAqi");
+  aqiEl.textContent = Math.round(aqi);
+  aqiEl.style.color = aqi <= 50 ? "var(--green)" : aqi <= 100 ? "var(--yellow)"
+                    : aqi <= 200 ? "var(--orange)" : "var(--red)";
+  if (eco2 !== null) $("cEco2").textContent = Math.round(eco2);
+  if (etvoc !== null) $("cTvoc").textContent = Math.round(etvoc);
+}
+
+// ---- charts (dependency-free canvas) ----
+function drawChart(canvas, xs, series) {
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const padL = 52, padR = 10, padT = 8, padB = 20;
+  const pw = w - padL - padR, ph = h - padT - padB;
+  if (!xs.length) return;
+  let xmin = xs[0], xmax = xs[xs.length - 1]; if (xmax === xmin) xmax = xmin + 1;
+  let ymin = Infinity, ymax = -Infinity;
+  for (const s of series) for (const v of s.data) if (v != null && !isNaN(v)) { if (v < ymin) ymin = v; if (v > ymax) ymax = v; }
+  if (!isFinite(ymin)) { ymin = 0; ymax = 1; }
+  if (ymin === ymax) { ymin -= 1; ymax += 1; }
+  const yr = ymax - ymin; ymin -= yr * 0.08; ymax += yr * 0.08;
+  const X = x => padL + (x - xmin) / (xmax - xmin) * pw;
+  const Y = y => padT + (1 - (y - ymin) / (ymax - ymin)) * ph;
+
+  ctx.strokeStyle = "#e8e8e8"; ctx.fillStyle = "#888"; ctx.lineWidth = 1; ctx.font = "10px sans-serif";
+  for (let i = 0; i <= 4; i++) {
+    const yv = ymin + (ymax - ymin) * i / 4, py = Y(yv);
+    ctx.beginPath(); ctx.moveTo(padL, py); ctx.lineTo(w - padR, py); ctx.stroke();
+    ctx.textAlign = "right"; ctx.fillText(yv.toFixed(1), padL - 4, py + 3);
+  }
+  ctx.textAlign = "center";
+  for (let i = 0; i <= 5; i++) {
+    const xv = xmin + (xmax - xmin) * i / 5;
+    ctx.fillText(xv.toFixed(0) + "s", X(xv), h - 6);
+  }
+  for (const s of series) {
+    ctx.strokeStyle = s.color; ctx.lineWidth = 1.5; ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < xs.length; i++) {
+      const v = s.data[i];
+      if (v == null || isNaN(v)) { started = false; continue; }
+      const px = X(xs[i]), py = Y(v);
+      if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
+  let lx = padL + 2; const ly = padT + 10;
+  ctx.textAlign = "left";
+  for (const s of series) {
+    ctx.fillStyle = s.color; ctx.fillRect(lx, ly - 8, 10, 10);
+    ctx.fillStyle = "#444"; ctx.fillText(s.label, lx + 13, ly);
+    lx += 13 + ctx.measureText(s.label).width + 14;
+  }
+}
+
+function redraw() {
+  if (!buffer.length) return;
+  const xs = buffer.map(p => p.t);
+  drawChart($("chartTH"), xs, [
+    { label: "Temp (" + tempUnit + ")", color: "#e53935",
+      data: buffer.map(p => tempUnit === "F" ? p.tempF : p.temp) },
+    { label: "Humidity (%)", color: "#1e88e5", data: buffer.map(p => p.hum) },
+  ]);
+  drawChart($("chartAQI"), xs, [
+    { label: "AQI", color: "#7cb342", data: buffer.map(p => p.aqi) },
+  ]);
+  drawChart($("chartGas"), xs, [
+    { label: "eCO2 (ppm)", color: "#8e24aa", data: buffer.map(p => p.eco2) },
+    { label: "eTVOC (ppb)", color: "#00897b", data: buffer.map(p => p.etvoc) },
+  ]);
+}
+setInterval(redraw, 500);
+window.addEventListener("resize", redraw);
+
+// ---- field definition tooltips (wrap + clamp to viewport so nothing clips) ----
+const tipEl = $("tip");
+document.querySelectorAll(".card .title[data-tip]").forEach(el => {
+  const show = () => {
+    tipEl.textContent = el.dataset.tip;
+    tipEl.style.display = "block";
+    const r = el.getBoundingClientRect();
+    let left = r.left + r.width / 2 - tipEl.offsetWidth / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - tipEl.offsetWidth - 8));
+    let top = r.bottom + 6;
+    if (top + tipEl.offsetHeight > window.innerHeight - 8) top = r.top - tipEl.offsetHeight - 6;
+    tipEl.style.left = left + "px";
+    tipEl.style.top = Math.max(8, top) + "px";
+  };
+  const hide = () => { tipEl.style.display = "none"; };
+  el.addEventListener("mouseenter", show);
+  el.addEventListener("mouseleave", hide);
+});
+
+// ---- temperature unit toggle ----
+$("unitBtn").addEventListener("click", () => {
+  tempUnit = tempUnit === "C" ? "F" : "C";
+  $("unitBtn").textContent = "Units: " + tempUnit;
+  updateCards();
+  redraw();
+});
+
+// ---- history points ----
+$("maxPoints").addEventListener("change", e => {
+  maxPoints = Math.max(50, Math.min(2000, parseInt(e.target.value) || 300));
+  if (buffer.length > maxPoints) buffer.splice(0, buffer.length - maxPoints);
+});
+
+// ---- CSV ----
+$("downloadBtn").addEventListener("click", () => {
+  const text = CSV_HEADER.join(",") + "\n" + csvRows.map(r => r.join(",")).join("\n") + "\n";
+  const blob = new Blob([text], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "aircube_log_" + new Date().toISOString().replace(/[:.]/g, "-") + ".csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+$("logFileBtn").addEventListener("click", async () => {
+  if (csvWritable) { await stopFileLog(); return; }
+  if (!window.showSaveFilePicker) { alert("File logging needs Chrome's File System Access API. Use Download CSV instead."); return; }
+  try {
+    const handle = await window.showSaveFilePicker({
+      suggestedName: "aircube_log_" + new Date().toISOString().replace(/[:.]/g, "-") + ".csv",
+      types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
+    });
+    csvWritable = await handle.createWritable();
+    await csvWritable.write(CSV_HEADER.join(",") + "\n");
+    $("logFileBtn").textContent = "Stop file log";
+    $("csvStatus").textContent = "logging to " + handle.name;
+  } catch (e) { log("file log: " + e); }
+});
+
+async function stopFileLog() {
+  if (csvWritable) { try { await csvWritable.close(); } catch (e) {} csvWritable = null; }
+  $("logFileBtn").textContent = "Start file log...";
+  $("csvStatus").textContent = "";
+}
+
+// ---- device controls ----
+$("getConfigBtn").addEventListener("click", () => sendCommand('{"cmd":"get_config"}'));
+$("intensity").addEventListener("input", e => $("intensityVal").textContent = (+e.target.value).toFixed(2));
+$("setIntensityBtn").addEventListener("click", () =>
+  sendCommand('{"cmd":"set_intensity","value":' + (+$("intensity").value) + "}"));
+$("setPeriodBtn").addEventListener("click", () => {
+  let p = Math.max(100, Math.min(10000, parseInt($("period").value) || 1000));
+  sendCommand('{"cmd":"set_readout_period","value":' + p + "}");
+});
+$("historyBtn").addEventListener("click", () => sendCommand("h"));
+
+if (!("serial" in navigator)) log("Web Serial unavailable. Use Chrome over https or http://localhost.");
+</script>
+</body>
+</html>
